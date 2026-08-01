@@ -14,6 +14,17 @@
   --color-warning: #e6c07b;
   --color-success: #7fd99a;
   --color-info: #6b9fff;
+  /* WoW class colors */
+  --color-class-deathknight: #c41e3a;
+  --color-class-druid: #ff7c0a;
+  --color-class-hunter: #aad372;
+  --color-class-mage: #3fc7eb;
+  --color-class-paladin: #f48cba;
+  --color-class-priest: #ffffff;
+  --color-class-rogue: #fff468;
+  --color-class-shaman: #0070dd;
+  --color-class-warlock: #8788ee;
+  --color-class-warrior: #c69b6d;
   --font-sans: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
 }

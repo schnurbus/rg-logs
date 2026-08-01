@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"rg-logs/internal/wow"
 )
 
 type UploadStatus string
@@ -48,6 +50,7 @@ type Actor struct {
 	Flags     int64     `json:"flags"`
 	IsPlayer  bool      `json:"isPlayer"`
 	OwnerGUID *string   `json:"ownerGuid"`
+	Class     *string   `json:"class,omitempty"`
 }
 
 type ActorStat struct {
@@ -57,6 +60,7 @@ type ActorStat struct {
 	GUID         string    `json:"guid"`
 	IsPlayer     bool      `json:"isPlayer"`
 	OwnerGUID    *string   `json:"ownerGuid,omitempty"`
+	Class        *string   `json:"class,omitempty"`
 	DamageDone   int64     `json:"damageDone"`
 	HealingDone  int64     `json:"healingDone"`
 	Overheal     int64     `json:"overheal"`
@@ -193,7 +197,7 @@ func (s *Store) GetFight(ctx context.Context, id uuid.UUID) (*Fight, error) {
 
 func (s *Store) ListActorStats(ctx context.Context, fightID uuid.UUID) ([]ActorStat, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT a.id, a.name, a.guid, a.is_player, a.owner_guid,
+		SELECT a.id, a.name, a.guid, a.is_player, a.owner_guid, a.class,
 		       s.damage_done, s.healing_done, s.overheal, s.damage_taken, s.active_time_ms,
 		       f.duration_ms
 		FROM actor_stats s
@@ -212,7 +216,7 @@ func (s *Store) ListActorStats(ctx context.Context, fightID uuid.UUID) ([]ActorS
 		var durationMs int64
 		st.FightID = fightID
 		if err := rows.Scan(
-			&st.ActorID, &st.Name, &st.GUID, &st.IsPlayer, &st.OwnerGUID,
+			&st.ActorID, &st.Name, &st.GUID, &st.IsPlayer, &st.OwnerGUID, &st.Class,
 			&st.DamageDone, &st.HealingDone, &st.Overheal, &st.DamageTaken, &st.ActiveTimeMs,
 			&durationMs,
 		); err != nil {
@@ -232,7 +236,95 @@ func (s *Store) ListActorStats(ctx context.Context, fightID uuid.UUID) ([]ActorS
 	if out == nil {
 		out = []ActorStat{}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if err := s.fillMissingClasses(ctx, fightID, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// fillMissingClasses derives class from this fight's spell_stats when actors.class is empty
+// (e.g. uploads persisted before class detection existed). Pets inherit their owner's class.
+func (s *Store) fillMissingClasses(ctx context.Context, fightID uuid.UUID, stats []ActorStat) error {
+	needDetect := false
+	for _, st := range stats {
+		if st.IsPlayer && (st.Class == nil || *st.Class == "") {
+			needDetect = true
+			break
+		}
+	}
+	if !needDetect {
+		s.propagateOwnerClass(stats)
+		return nil
+	}
+
+	rows, err := s.Pool.Query(ctx, `
+		SELECT actor_id, spell_id, SUM(total)::bigint
+		FROM spell_stats
+		WHERE fight_id=$1
+		GROUP BY actor_id, spell_id`, fightID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	byActor := make(map[uuid.UUID]map[int]int64)
+	for rows.Next() {
+		var actorID uuid.UUID
+		var spellID int
+		var total int64
+		if err := rows.Scan(&actorID, &spellID, &total); err != nil {
+			return err
+		}
+		m := byActor[actorID]
+		if m == nil {
+			m = make(map[int]int64)
+			byActor[actorID] = m
+		}
+		m[spellID] += total
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for i := range stats {
+		st := &stats[i]
+		if !st.IsPlayer || (st.Class != nil && *st.Class != "") {
+			continue
+		}
+		cls := string(wow.DetectClass(byActor[st.ActorID]))
+		if cls == "" {
+			continue
+		}
+		st.Class = &cls
+	}
+
+	s.propagateOwnerClass(stats)
+	return nil
+}
+
+func (s *Store) propagateOwnerClass(stats []ActorStat) {
+	byGUID := make(map[string]*string, len(stats))
+	for i := range stats {
+		if stats[i].IsPlayer && stats[i].Class != nil && *stats[i].Class != "" {
+			byGUID[stats[i].GUID] = stats[i].Class
+		}
+	}
+	for i := range stats {
+		st := &stats[i]
+		if st.IsPlayer || st.OwnerGUID == nil {
+			continue
+		}
+		if st.Class != nil && *st.Class != "" {
+			continue
+		}
+		if cls, ok := byGUID[*st.OwnerGUID]; ok {
+			st.Class = cls
+		}
+	}
 }
 
 func (s *Store) ListSpellStats(ctx context.Context, fightID, actorID uuid.UUID) ([]SpellStat, error) {
@@ -270,11 +362,13 @@ func (s *Store) PersistParseResult(ctx context.Context, uploadID uuid.UUID, acto
 
 	for _, a := range actors {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO actors (id, upload_id, guid, name, flags, is_player, owner_guid)
-			VALUES ($1,$2,$3,$4,$5,$6,$7)
+			INSERT INTO actors (id, upload_id, guid, name, flags, is_player, owner_guid, class)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 			ON CONFLICT (upload_id, guid) DO UPDATE
-			SET name=EXCLUDED.name, flags=EXCLUDED.flags, is_player=EXCLUDED.is_player, owner_guid=COALESCE(EXCLUDED.owner_guid, actors.owner_guid)`,
-			a.ID, uploadID, a.GUID, a.Name, a.Flags, a.IsPlayer, a.OwnerGUID,
+			SET name=EXCLUDED.name, flags=EXCLUDED.flags, is_player=EXCLUDED.is_player,
+			    owner_guid=COALESCE(EXCLUDED.owner_guid, actors.owner_guid),
+			    class=COALESCE(EXCLUDED.class, actors.class)`,
+			a.ID, uploadID, a.GUID, a.Name, a.Flags, a.IsPlayer, a.OwnerGUID, a.Class,
 		)
 		if err != nil {
 			return fmt.Errorf("insert actor %s: %w", a.GUID, err)
@@ -333,6 +427,7 @@ type PersistedActor struct {
 	Flags     int64
 	IsPlayer  bool
 	OwnerGUID *string
+	Class     *string
 }
 
 type PersistedFightStat struct {

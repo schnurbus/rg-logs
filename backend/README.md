@@ -30,7 +30,7 @@ Migrationen laufen automatisch beim Start (`internal/db/migrations`).
 | `POST` | `/api/uploads` | Multipart-Feld `file` |
 | `GET` | `/api/uploads` | Liste |
 | `GET` | `/api/uploads/:id` | Detail + Fights |
-| `GET` | `/api/fights/:id` | Meta + Participants (`?sort=damage\|healing\|taken`) |
+| `GET` | `/api/fights/:id` | Meta + Participants inkl. `class` (`?sort=damage\|healing\|taken`) |
 | `GET` | `/api/fights/:id/spells?actorId=` | Spell-Breakdown |
 | `GET` | `/api/health` | Healthcheck |
 

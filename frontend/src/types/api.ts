@@ -43,6 +43,8 @@ export interface Participant {
   isPlayer: boolean
   /** Present for pets/guardians/summons owned by a player */
   ownerGuid?: string
+  /** Inferred from signature spell IDs (WotLK). */
+  class?: string
   damageDone: number
   healingDone: number
   overheal: number

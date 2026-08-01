@@ -12,6 +12,7 @@ import (
 
 	"rg-logs/internal/db"
 	"rg-logs/internal/parser"
+	"rg-logs/internal/wow"
 )
 
 type Job struct {
@@ -118,6 +119,45 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 			IsPlayer:  a.IsPlayer,
 			OwnerGUID: owner,
 		})
+	}
+
+	// Aggregate spell totals per actor GUID across all fights for class detection.
+	spellTotalsByGUID := make(map[string]map[int]int64)
+	for _, fr := range result.Fights {
+		for _, sp := range fr.Spells {
+			m := spellTotalsByGUID[sp.ActorGUID]
+			if m == nil {
+				m = make(map[int]int64)
+				spellTotalsByGUID[sp.ActorGUID] = m
+			}
+			m[sp.SpellID] += sp.Total
+		}
+	}
+	for i := range actors {
+		a := &actors[i]
+		if !a.IsPlayer {
+			continue
+		}
+		cls := string(wow.DetectClass(spellTotalsByGUID[a.GUID]))
+		if cls != "" {
+			a.Class = &cls
+		}
+	}
+	// Pets inherit owner class for UI coloring.
+	classByGUID := make(map[string]*string, len(actors))
+	for i := range actors {
+		if actors[i].IsPlayer && actors[i].Class != nil {
+			classByGUID[actors[i].GUID] = actors[i].Class
+		}
+	}
+	for i := range actors {
+		a := &actors[i]
+		if a.IsPlayer || a.OwnerGUID == nil {
+			continue
+		}
+		if cls, ok := classByGUID[*a.OwnerGUID]; ok {
+			a.Class = cls
+		}
 	}
 
 	fights := make([]db.PersistedFight, 0, len(result.Fights))

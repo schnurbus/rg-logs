@@ -6,6 +6,7 @@ import type {
   Upload,
   UploadStatus,
 } from '../types/api'
+import { asPlayerClass } from '../lib/classes'
 
 type Raw = Record<string, unknown>
 
@@ -83,6 +84,7 @@ export function normalizeParticipant(raw: unknown): Participant {
     name: asString(pick(o, 'name', 'name'), 'Unknown'),
     isPlayer: asBool(pick(o, 'isPlayer', 'is_player')),
     ownerGuid,
+    class: asPlayerClass(pick(o, 'class', 'class')),
     damageDone,
     healingDone,
     overheal: asNumber(pick(o, 'overheal', 'overheal')),

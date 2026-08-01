@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ApiError, getFight, getFightSpells } from '../api/client'
 import { ErrorMessage, Loading } from '../components/ErrorMessage'
+import { MeterBar } from '../components/MeterBar'
+import {
+  asPlayerClass,
+  classTextStyle,
+  type PlayerClass,
+} from '../lib/classes'
 import {
   formatDuration,
   formatNumber,
@@ -55,6 +61,10 @@ function rateLabel(tab: MetricTab): string {
   if (tab === 'healing') return 'HPS'
   if (tab === 'taken') return 'DTPS'
   return 'DPS'
+}
+
+function playerClassOf(p: Participant): PlayerClass | undefined {
+  return asPlayerClass(p.class)
 }
 
 /** Group player pets under their owners; roll pet damage into player totals. NPCs omitted. */
@@ -152,6 +162,13 @@ export function FightDetailPage() {
     [rows, tab],
   )
 
+  /** Top player amount — bar widths are relative to this (WCL-style). */
+  const maxAmount = useMemo(
+    () =>
+      rows.reduce((max, row) => Math.max(max, amountFor(row.totals, tab)), 0),
+    [rows, tab],
+  )
+
   const openSpells = async (p: Participant) => {
     if (!fightId) return
     setSelected(p)
@@ -192,6 +209,8 @@ export function FightDetailPage() {
   if (!fight) {
     return <Loading label="Fight laden…" />
   }
+
+  const selectedClass = selected ? playerClassOf(selected) : undefined
 
   return (
     <div className="space-y-6">
@@ -249,7 +268,7 @@ export function FightDetailPage() {
           <thead className="bg-surface-raised text-xs uppercase tracking-wide text-text-muted">
             <tr>
               <th className="px-3 py-2 font-medium w-8">#</th>
-              <th className="px-3 py-2 font-medium">Name</th>
+              <th className="px-3 py-2 font-medium min-w-[12rem]">Name</th>
               <th className="px-3 py-2 font-medium text-right">Amount</th>
               <th className="px-3 py-2 font-medium text-right">
                 {rateLabel(tab)}
@@ -262,8 +281,12 @@ export function FightDetailPage() {
               const amount = amountFor(row.totals, tab)
               const rate = rateFor(row.totals, tab, fight.durationMs)
               const pct = total > 0 ? amount / total : 0
+              const barRatio = maxAmount > 0 ? amount / maxAmount : 0
+              const cls = playerClassOf(row.player)
               const active = selected?.actorId === row.player.actorId
-              const visiblePets = row.pets.filter((pet) => amountFor(pet, tab) > 0)
+              const visiblePets = row.pets.filter(
+                (pet) => amountFor(pet, tab) > 0,
+              )
 
               const playerRow = (
                 <tr
@@ -277,8 +300,15 @@ export function FightDetailPage() {
                   ].join(' ')}
                 >
                   <td className="px-3 py-2 text-text-muted">{i + 1}</td>
-                  <td className="px-3 py-2">
-                    <span className="font-medium text-text">{row.player.name}</span>
+                  <td className="px-1 py-1.5">
+                    <MeterBar ratio={barRatio} playerClass={cls}>
+                      <span
+                        className="font-medium"
+                        style={classTextStyle(cls)}
+                      >
+                        {row.player.name}
+                      </span>
+                    </MeterBar>
                   </td>
                   <td className="px-3 py-2 text-right font-mono">
                     {formatNumber(amount)}
@@ -296,6 +326,8 @@ export function FightDetailPage() {
                 const petAmount = amountFor(pet, tab)
                 const petRate = rateFor(pet, tab, fight.durationMs)
                 const petPct = total > 0 ? petAmount / total : 0
+                const petBarRatio = maxAmount > 0 ? petAmount / maxAmount : 0
+                const petCls = playerClassOf(pet) ?? cls
                 const petActive = selected?.actorId === pet.actorId
                 return (
                   <tr
@@ -309,9 +341,22 @@ export function FightDetailPage() {
                     ].join(' ')}
                   >
                     <td className="px-3 py-2 text-text-muted" />
-                    <td className="px-3 py-2 pl-8">
-                      <span className="text-text-muted">{pet.name}</span>
-                      <span className="ml-2 text-xs text-text-muted">Pet</span>
+                    <td className="py-1.5 pl-6 pr-1">
+                      <MeterBar
+                        ratio={petBarRatio}
+                        playerClass={petCls}
+                        muted
+                      >
+                        <span
+                          className="text-sm"
+                          style={classTextStyle(petCls)}
+                        >
+                          {pet.name}
+                        </span>
+                        <span className="ml-2 text-xs text-text-muted">
+                          Pet
+                        </span>
+                      </MeterBar>
                     </td>
                     <td className="px-3 py-2 text-right font-mono text-text-muted">
                       {formatNumber(petAmount)}
@@ -347,7 +392,7 @@ export function FightDetailPage() {
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="text-sm font-semibold">
               Spell-Breakdown:{' '}
-              <span className="text-accent">{selected.name}</span>
+              <span style={classTextStyle(selectedClass)}>{selected.name}</span>
               {selected.ownerGuid ? (
                 <span className="ml-2 text-xs font-normal text-text-muted">
                   Pet
@@ -379,7 +424,9 @@ export function FightDetailPage() {
               <table className="w-full min-w-[480px] border-collapse text-left text-sm">
                 <thead className="text-xs uppercase tracking-wide text-text-muted">
                   <tr>
-                    <th className="px-2 py-1.5 font-medium">Spell</th>
+                    <th className="px-2 py-1.5 font-medium min-w-[10rem]">
+                      Spell
+                    </th>
                     <th className="px-2 py-1.5 font-medium text-right">
                       Total
                     </th>
@@ -393,16 +440,25 @@ export function FightDetailPage() {
                 <tbody>
                   {(() => {
                     const spellTotal = spells.reduce((s, x) => s + x.total, 0)
+                    const spellMax = spells.reduce(
+                      (m, x) => Math.max(m, x.total),
+                      0,
+                    )
                     return spells.map((s) => (
                       <tr
                         key={`${s.spellId}-${s.metric}-${s.spellName}`}
                         className="border-t border-border-subtle"
                       >
-                        <td className="px-2 py-1.5">
-                          <span className="text-text">{s.spellName}</span>
-                          <span className="ml-2 font-mono text-xs text-text-muted">
-                            {s.spellId}
-                          </span>
+                        <td className="px-0.5 py-1">
+                          <MeterBar
+                            ratio={spellMax > 0 ? s.total / spellMax : 0}
+                            playerClass={selectedClass}
+                          >
+                            <span className="text-text">{s.spellName}</span>
+                            <span className="ml-2 font-mono text-xs text-text-muted">
+                              {s.spellId}
+                            </span>
+                          </MeterBar>
                         </td>
                         <td className="px-2 py-1.5 text-right font-mono">
                           {formatNumber(s.total)}
