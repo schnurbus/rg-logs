@@ -3,38 +3,40 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 
 	"rg-logs/internal/db"
 	"rg-logs/internal/parser"
+	"rg-logs/internal/storage"
 	"rg-logs/internal/wow"
 )
 
 type Job struct {
-	UploadID uuid.UUID
-	Path     string
+	UploadID    uuid.UUID
+	StoragePath string
 }
 
 type Worker struct {
-	store    *db.Store
-	queue    chan Job
-	wg       sync.WaitGroup
-	uploadDir string
+	store   *db.Store
+	storage *storage.Client
+	queue   chan Job
+	wg      sync.WaitGroup
 }
 
-func NewWorker(store *db.Store, uploadDir string, queueSize int) *Worker {
+func NewWorker(store *db.Store, storageClient *storage.Client, queueSize int) *Worker {
 	if queueSize < 1 {
 		queueSize = 8
 	}
 	return &Worker{
-		store:     store,
-		queue:     make(chan Job, queueSize),
-		uploadDir: uploadDir,
+		store:   store,
+		storage: storageClient,
+		queue:   make(chan Job, queueSize),
 	}
 }
 
@@ -86,13 +88,39 @@ func (w *Worker) process(job Job) {
 }
 
 func (w *Worker) runParse(ctx context.Context, job Job) error {
-	path := job.Path
+	path := job.StoragePath
 	if path == "" {
-		path = filepath.Join(w.uploadDir, job.UploadID.String()+".txt")
+		upload, err := w.store.GetUpload(ctx, job.UploadID)
+		if err != nil {
+			return fmt.Errorf("load upload: %w", err)
+		}
+		path = upload.StoragePath
 	}
-	f, err := os.Open(path)
+
+	rc, err := w.storage.Download(ctx, path)
 	if err != nil {
-		return fmt.Errorf("open log: %w", err)
+		return fmt.Errorf("download log: %w", err)
+	}
+	defer rc.Close()
+
+	tmp, err := os.CreateTemp("", "rglogs-*.txt")
+	if err != nil {
+		return fmt.Errorf("temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := io.Copy(tmp, rc); err != nil {
+		tmp.Close()
+		return fmt.Errorf("buffer log: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp: %w", err)
+	}
+
+	f, err := os.Open(tmpPath)
+	if err != nil {
+		return fmt.Errorf("reopen temp: %w", err)
 	}
 	defer f.Close()
 
@@ -121,7 +149,6 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 		})
 	}
 
-	// Aggregate spell totals per actor GUID across all fights for class detection.
 	spellTotalsByGUID := make(map[string]map[int]int64)
 	for _, fr := range result.Fights {
 		for _, sp := range fr.Spells {
@@ -143,7 +170,6 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 			a.Class = &cls
 		}
 	}
-	// Pets inherit owner class for UI coloring.
 	classByGUID := make(map[string]*string, len(actors))
 	for i := range actors {
 		if actors[i].IsPlayer && actors[i].Class != nil {
@@ -226,5 +252,26 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 		fights = append(fights, pf)
 	}
 
-	return w.store.PersistParseResult(ctx, job.UploadID, actors, fights)
+	if err := w.store.PersistParseResult(ctx, job.UploadID, actors, fights); err != nil {
+		return err
+	}
+
+	upload, err := w.store.GetUpload(ctx, job.UploadID)
+	if err != nil {
+		return fmt.Errorf("reload upload: %w", err)
+	}
+	if strings.TrimSpace(upload.Name) == "" {
+		titles := make([]string, 0, len(fights))
+		for _, f := range fights {
+			titles = append(titles, f.Title)
+		}
+		name := wow.DetectInstance(titles)
+		if name == "" {
+			name = upload.Filename
+		}
+		if err := w.store.SetUploadNameIfEmpty(ctx, job.UploadID, name); err != nil {
+			return fmt.Errorf("set name: %w", err)
+		}
+	}
+	return nil
 }

@@ -7,6 +7,7 @@ import type {
   UploadStatus,
 } from '../types/api'
 import { asPlayerClass } from '../lib/classes'
+import { getApiAccessToken } from './token'
 
 type Raw = Record<string, unknown>
 
@@ -110,6 +111,8 @@ export function normalizeUpload(raw: unknown): Upload {
   const fightsRaw = pick<unknown>(o, 'fights', 'fights')
   return {
     id: asString(pick(o, 'id', 'id')),
+    userId: asString(pick(o, 'userId', 'user_id')) || undefined,
+    name: asString(pick(o, 'name', 'name')) || undefined,
     filename: asString(pick(o, 'filename', 'filename')),
     sizeBytes: asNumber(pick(o, 'sizeBytes', 'size_bytes')),
     status: asStatus(pick(o, 'status', 'status')),
@@ -118,6 +121,8 @@ export function normalizeUpload(raw: unknown): Upload {
       if (e == null || e === '') return null
       return asString(e)
     })(),
+    contentHash: asString(pick(o, 'contentHash', 'content_hash')) || undefined,
+    isPrivate: asBool(pick(o, 'isPrivate', 'is_private')),
     createdAt: asString(pick(o, 'createdAt', 'created_at')),
     processedAt: (() => {
       const p = pick<unknown>(o, 'processedAt', 'processed_at')
@@ -184,7 +189,12 @@ export class ApiError extends Error {
 }
 
 async function request(path: string, init?: RequestInit): Promise<unknown> {
-  const res = await fetch(path, init)
+  const headers = new Headers(init?.headers)
+  const token = getApiAccessToken()
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+  const res = await fetch(path, { ...init, headers })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new ApiError(res.status, text)
@@ -203,8 +213,9 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
   }
 }
 
-export async function listUploads(): Promise<Upload[]> {
-  const data = await request('/api/uploads')
+export async function listUploads(opts?: { mine?: boolean }): Promise<Upload[]> {
+  const qs = opts?.mine ? '?mine=1' : ''
+  const data = await request(`/api/uploads${qs}`)
   if (!Array.isArray(data)) return []
   return data.map(normalizeUpload)
 }
@@ -214,14 +225,48 @@ export async function getUpload(id: string): Promise<Upload> {
   return normalizeUpload(data)
 }
 
-export async function uploadFile(file: File): Promise<Upload> {
+export async function uploadFile(
+  file: File,
+  opts?: { isPrivate?: boolean; name?: string },
+): Promise<Upload> {
   const form = new FormData()
   form.append('file', file)
-  const data = await request('/api/uploads', {
-    method: 'POST',
-    body: form,
+  if (opts?.isPrivate) {
+    form.append('is_private', 'true')
+  }
+  if (opts?.name?.trim()) {
+    form.append('name', opts.name.trim())
+  }
+  try {
+    const data = await request('/api/uploads', {
+      method: 'POST',
+      body: form,
+    })
+    return normalizeUpload(data)
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 409) {
+      try {
+        const parsed = JSON.parse(err.body) as { upload?: unknown }
+        if (parsed.upload) return normalizeUpload(parsed.upload)
+      } catch {
+        /* fall through */
+      }
+    }
+    throw err
+  }
+}
+
+export async function renameUpload(id: string, name: string): Promise<Upload> {
+  const data = await request(`/api/uploads/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
   })
   return normalizeUpload(data)
+}
+
+export async function deleteUpload(id: string): Promise<void> {
+  await request(`/api/uploads/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 export async function getFight(id: string): Promise<FightDetail> {

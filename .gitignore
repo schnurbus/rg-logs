@@ -1,4 +1,4 @@
-# Uploads (persisted logs)
+# Uploads (legacy local files — raw logs now live in Supabase Storage)
 uploads/*
 !uploads/.gitkeep
 
@@ -6,6 +6,10 @@ uploads/*
 .env
 .env.*
 !.env.example
+
+# Supabase
+supabase/.temp/
+supabase/.branches/
 
 # Go
 backend/bin/

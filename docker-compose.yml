@@ -1,20 +1,10 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: rglogs-postgres
-    environment:
-      POSTGRES_USER: rglogs
-      POSTGRES_PASSWORD: rglogs
-      POSTGRES_DB: rglogs
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: rglogs-mailpit
     ports:
-      - "5432:5432"
-    volumes:
-      - rglogs_pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rglogs -d rglogs"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-volumes:
-  rglogs_pgdata:
+      - "8025:8025" # Web UI
+      - "1025:1025" # SMTP
+    environment:
+      MP_SMTP_DISABLE_RDNS: "true"
+    restart: unless-stopped

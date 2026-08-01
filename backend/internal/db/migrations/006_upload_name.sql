@@ -1,0 +1,3 @@
+-- +migrate Up
+ALTER TABLE uploads
+    ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';

@@ -1,13 +1,17 @@
 import { useCallback, useRef, useState, type DragEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { ApiError, uploadFile } from '../api/client'
+import { useAuth } from '../auth/AuthProvider'
 import { formatBytes } from '../lib/format'
 
 export function UploadPage() {
   const navigate = useNavigate()
+  const { user, loading } = useAuth()
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
+  const [name, setName] = useState('')
+  const [isPrivate, setIsPrivate] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -28,12 +32,15 @@ export function UploadPage() {
   )
 
   const handleUpload = async () => {
-    if (!file || uploading) return
+    if (!file || uploading || !user) return
     setUploading(true)
     setError(null)
     setProgress('Hochladen…')
     try {
-      const result = await uploadFile(file)
+      const result = await uploadFile(file, {
+        isPrivate,
+        name: name.trim() || undefined,
+      })
       setProgress('Fertig — Weiterleitung…')
       navigate(`/uploads/${result.id}`)
     } catch (err) {
@@ -50,10 +57,29 @@ export function UploadPage() {
     }
   }
 
+  if (!loading && !user) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-xl font-semibold tracking-tight">
+          Combat Log hochladen
+        </h1>
+        <p className="text-sm text-text-muted">
+          Zum Hochladen bitte{' '}
+          <Link to="/login" className="text-accent">
+            anmelden
+          </Link>
+          .
+        </p>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Combat Log hochladen</h1>
+        <h1 className="text-xl font-semibold tracking-tight">
+          Combat Log hochladen
+        </h1>
         <p className="mt-1 text-sm text-text-muted">
           WotLK Classic Combat Log (.txt) per Drag-and-Drop oder Dateiauswahl.
         </p>
@@ -73,9 +99,7 @@ export function UploadPage() {
             : 'border-border bg-surface-raised hover:border-border/80',
         ].join(' ')}
       >
-        <p className="text-sm text-text-muted">
-          Datei hierher ziehen oder
-        </p>
+        <p className="text-sm text-text-muted">Datei hierher ziehen oder</p>
         <button
           type="button"
           className="mt-3 rounded bg-accent px-4 py-2 text-sm font-medium text-surface hover:bg-accent-hover"
@@ -96,11 +120,31 @@ export function UploadPage() {
             <span className="text-text-muted">({formatBytes(file.size)})</span>
           </p>
         ) : (
-          <p className="mt-4 text-xs text-text-muted">
-            Erwartet: WoWCombatLog.txt
-          </p>
+          <p className="mt-4 text-xs text-text-muted">Erwartet: WoWCombatLog.txt</p>
         )}
       </div>
+
+      <label className="block text-sm">
+        <span className="text-text-muted">Name (optional)</span>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={200}
+          placeholder="Leer = Instanz aus Bossen erkennen"
+          className="mt-1 w-full max-w-md rounded border border-border bg-surface-raised px-3 py-2 text-text outline-none focus:border-accent"
+        />
+      </label>
+
+      <label className="flex items-center gap-2 text-sm text-text-muted">
+        <input
+          type="checkbox"
+          checked={isPrivate}
+          onChange={(e) => setIsPrivate(e.target.checked)}
+          className="rounded border-border"
+        />
+        Privat (nur für dich sichtbar)
+      </label>
 
       {error ? (
         <p className="rounded border border-danger/40 bg-red-950/30 px-4 py-3 text-sm text-danger">
@@ -116,7 +160,7 @@ export function UploadPage() {
 
       <button
         type="button"
-        disabled={!file || uploading}
+        disabled={!file || uploading || !user}
         onClick={handleUpload}
         className="rounded bg-accent px-5 py-2 text-sm font-medium text-surface disabled:cursor-not-allowed disabled:opacity-40 hover:enabled:bg-accent-hover"
       >

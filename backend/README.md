@@ -1,40 +1,47 @@
 # rg-logs Backend
 
-Go/Fiber API für WotLK-Combat-Log-Analyse.
+Go/Fiber API für WotLK-Combat-Log-Analyse. Auth und Storage laufen über Supabase.
 
 ## Voraussetzungen
 
-- Go 1.22+
-- Docker (PostgreSQL)
+- Go 1.25+
+- [Supabase CLI](https://supabase.com/docs/guides/cli) (`supabase start`)
+- Optional: Docker Compose für Mailpit (`docker compose up -d`)
 
 ## Start
 
 ```bash
-# Postgres
+# 1) Supabase lokal (DB, Auth, Storage, Mailpit :54324)
+supabase start
+
+# 2) Env einmalig anlegen (Repo-Root)
+cp .env.example .env
+# ANON_KEY / SERVICE_ROLE_KEY / JWT_SECRET aus `supabase status` eintragen
+
+# Optional: zusätzliches Mailpit
 docker compose up -d
 
-# Backend (aus Repo-Root oder backend/)
+# 3) Backend (lädt automatisch ../.env)
 cd backend
-export DATABASE_URL='postgres://rglogs:rglogs@localhost:5432/rglogs?sslmode=disable'
-export UPLOAD_DIR=../uploads
-export HTTP_ADDR=:3000
 go run ./cmd/server
+# oder: air
 ```
 
 Migrationen laufen automatisch beim Start (`internal/db/migrations`).
 
 ## API
 
-| Methode | Pfad | Zweck |
-|---------|------|--------|
-| `POST` | `/api/uploads` | Multipart-Feld `file` |
-| `GET` | `/api/uploads` | Liste |
-| `GET` | `/api/uploads/:id` | Detail + Fights |
-| `GET` | `/api/fights/:id` | Meta + Participants inkl. `class` (`?sort=damage\|healing\|taken`) |
-| `GET` | `/api/fights/:id/spells?actorId=` | Spell-Breakdown |
-| `GET` | `/api/health` | Healthcheck |
+| Methode | Pfad | Auth | Zweck |
+|---------|------|------|--------|
+| `POST` | `/api/uploads` | ja | Multipart `file` + optional `is_private` |
+| `GET` | `/api/uploads` | optional | Öffentliche + eigene (`?mine=1`) |
+| `GET` | `/api/uploads/:id` | optional | Detail + Fights (private nur Owner) |
+| `DELETE` | `/api/uploads/:id` | Owner | Löscht DB + Storage-Objekt |
+| `GET` | `/api/fights/:id` | optional | Meta + Participants |
+| `GET` | `/api/fights/:id/spells?actorId=` | optional | Spell-Breakdown |
+| `GET` | `/api/health` | nein | Healthcheck |
 
-CORS erlaubt `http://localhost:5173` (Vite).
+CORS erlaubt `http://localhost:5173` (Vite). Bearer-Token = Supabase Access Token.
 
 ## Tests
 

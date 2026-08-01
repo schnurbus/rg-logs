@@ -1,11 +1,13 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
@@ -13,14 +15,17 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/recover"
 	"github.com/google/uuid"
 
+	"rg-logs/internal/auth"
 	"rg-logs/internal/db"
 	"rg-logs/internal/ingest"
+	"rg-logs/internal/storage"
 )
 
 type Handler struct {
-	Store     *db.Store
-	Worker    *ingest.Worker
-	UploadDir string
+	Store   *db.Store
+	Worker  *ingest.Worker
+	Auth    *auth.Client
+	Storage *storage.Client
 }
 
 func NewRouter(h *Handler) *fiber.App {
@@ -39,16 +44,25 @@ func NewRouter(h *Handler) *fiber.App {
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173"},
-		AllowMethods: []string{fiber.MethodGet, fiber.MethodPost, fiber.MethodOptions},
-		AllowHeaders: []string{"Origin", "Content-Type", "Accept"},
+		AllowMethods: []string{
+			fiber.MethodGet, fiber.MethodPost, fiber.MethodPatch,
+			fiber.MethodDelete, fiber.MethodOptions,
+		},
+		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization"},
 	}))
 
 	app.Get("/api/health", h.Health)
-	app.Post("/api/uploads", h.CreateUpload)
-	app.Get("/api/uploads", h.ListUploads)
-	app.Get("/api/uploads/:id", h.GetUpload)
-	app.Get("/api/fights/:id", h.GetFight)
-	app.Get("/api/fights/:id/spells", h.GetFightSpells)
+
+	authed := app.Group("/api", OptionalAuth(h.Auth))
+	authed.Get("/uploads", h.ListUploads)
+	authed.Get("/uploads/:id", h.GetUpload)
+	authed.Get("/fights/:id", h.GetFight)
+	authed.Get("/fights/:id/spells", h.GetFightSpells)
+
+	write := app.Group("/api", RequireAuth(h.Auth))
+	write.Post("/uploads", h.CreateUpload)
+	write.Patch("/uploads/:id", h.UpdateUpload)
+	write.Delete("/uploads/:id", h.DeleteUpload)
 
 	return app
 }
@@ -58,32 +72,50 @@ func (h *Handler) Health(c fiber.Ctx) error {
 }
 
 func (h *Handler) CreateUpload(c fiber.Ctx) error {
+	user := UserFromContext(c)
+	if user == nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
+	}
+
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "multipart field 'file' required")
 	}
 
-	id := uuid.New()
-	if err := os.MkdirAll(h.UploadDir, 0o755); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "upload dir")
-	}
-
-	destPath := filepath.Join(h.UploadDir, id.String()+".txt")
 	src, err := fileHeader.Open()
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "open upload")
 	}
 	defer src.Close()
 
-	dst, err := os.Create(destPath)
+	data, err := io.ReadAll(io.LimitReader(src, 100*1024*1024+1))
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "create upload file")
+		return fiber.NewError(fiber.StatusInternalServerError, "read upload")
 	}
-	written, copyErr := io.Copy(dst, src)
-	closeErr := dst.Close()
-	if copyErr != nil || closeErr != nil {
-		_ = os.Remove(destPath)
-		return fiber.NewError(fiber.StatusInternalServerError, "save upload")
+	if len(data) > 100*1024*1024 {
+		return fiber.NewError(fiber.StatusRequestEntityTooLarge, "file too large (max 100MB)")
+	}
+
+	sum := sha256.Sum256(data)
+	contentHash := hex.EncodeToString(sum[:])
+
+	if existing, err := h.Store.GetUploadByUserHash(c.Context(), user.ID, contentHash); err == nil {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"error":  "duplicate upload",
+			"upload": existing,
+		})
+	} else if !db.IsNoRows(err) {
+		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("db: %v", err))
+	}
+
+	isPrivate := parseBoolForm(c.FormValue("is_private"), c.FormValue("isPrivate"))
+	name := strings.TrimSpace(firstNonEmpty(c.FormValue("name"), c.FormValue("Name")))
+
+	id := uuid.New()
+	storagePath := fmt.Sprintf("%s/%s.txt", user.ID.String(), id.String())
+
+	if err := h.Storage.Upload(c.Context(), storagePath, "text/plain", data); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("storage: %v", err))
 	}
 
 	filename := fileHeader.Filename
@@ -91,18 +123,45 @@ func (h *Handler) CreateUpload(c fiber.Ctx) error {
 		filename = "combatlog.txt"
 	}
 
-	upload, err := h.Store.CreateUpload(c.Context(), id, filename, written)
+	upload, err := h.Store.CreateUpload(c.Context(), db.CreateUploadParams{
+		ID:          id,
+		UserID:      user.ID,
+		Name:        name,
+		Filename:    filename,
+		SizeBytes:   int64(len(data)),
+		ContentHash: contentHash,
+		IsPrivate:   isPrivate,
+		StoragePath: storagePath,
+	})
 	if err != nil {
-		_ = os.Remove(destPath)
+		_ = h.Storage.Delete(c.Context(), storagePath)
+		if db.IsUniqueViolation(err) {
+			if existing, getErr := h.Store.GetUploadByUserHash(c.Context(), user.ID, contentHash); getErr == nil {
+				return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+					"error":  "duplicate upload",
+					"upload": existing,
+				})
+			}
+			return fiber.NewError(fiber.StatusConflict, "duplicate upload")
+		}
 		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("db: %v", err))
 	}
 
-	h.Worker.Enqueue(ingest.Job{UploadID: id, Path: destPath})
+	h.Worker.Enqueue(ingest.Job{UploadID: id, StoragePath: storagePath})
 	return c.Status(fiber.StatusAccepted).JSON(upload)
 }
 
 func (h *Handler) ListUploads(c fiber.Ctx) error {
-	list, err := h.Store.ListUploads(c.Context())
+	user := UserFromContext(c)
+	mineOnly := parseBoolQuery(c.Query("mine"))
+	var viewerID *uuid.UUID
+	if user != nil {
+		viewerID = &user.ID
+	}
+	if mineOnly && viewerID == nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
+	}
+	list, err := h.Store.ListUploads(c.Context(), viewerID, mineOnly)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
@@ -121,26 +180,108 @@ func (h *Handler) GetUpload(c fiber.Ctx) error {
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
+	if !canAccessUpload(UserFromContext(c), upload.UserID, upload.IsPrivate) {
+		return fiber.NewError(fiber.StatusNotFound, "upload not found")
+	}
 	fights, err := h.Store.ListFightsByUpload(c.Context(), id)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	return c.JSON(fiber.Map{
 		"id":          upload.ID,
+		"userId":      upload.UserID,
+		"name":        upload.Name,
 		"filename":    upload.Filename,
 		"sizeBytes":   upload.SizeBytes,
 		"status":      upload.Status,
 		"error":       upload.Error,
+		"contentHash": upload.ContentHash,
+		"isPrivate":   upload.IsPrivate,
 		"createdAt":   upload.CreatedAt,
 		"processedAt": upload.ProcessedAt,
 		"fights":      fights,
 	})
 }
 
+func (h *Handler) UpdateUpload(c fiber.Ctx) error {
+	user := UserFromContext(c)
+	if user == nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
+	}
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid id")
+	}
+	upload, err := h.Store.GetUpload(c.Context(), id)
+	if err != nil {
+		if db.IsNoRows(err) {
+			return fiber.NewError(fiber.StatusNotFound, "upload not found")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	if !isOwner(user, upload.UserID) {
+		return fiber.NewError(fiber.StatusForbidden, "not the upload owner")
+	}
+
+	var body struct {
+		Name *string `json:"name"`
+	}
+	if err := c.Bind().Body(&body); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid json body")
+	}
+	if body.Name == nil {
+		return fiber.NewError(fiber.StatusBadRequest, "name required")
+	}
+	name := strings.TrimSpace(*body.Name)
+	if name == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "name must not be empty")
+	}
+	if len(name) > 200 {
+		return fiber.NewError(fiber.StatusBadRequest, "name too long")
+	}
+	if err := h.Store.UpdateUploadName(c.Context(), id, name); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	upload.Name = name
+	return c.JSON(upload)
+}
+
+func (h *Handler) DeleteUpload(c fiber.Ctx) error {
+	user := UserFromContext(c)
+	if user == nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
+	}
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid id")
+	}
+	upload, err := h.Store.GetUpload(c.Context(), id)
+	if err != nil {
+		if db.IsNoRows(err) {
+			return fiber.NewError(fiber.StatusNotFound, "upload not found")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	if !isOwner(user, upload.UserID) {
+		return fiber.NewError(fiber.StatusForbidden, "not the upload owner")
+	}
+	if err := h.Store.DeleteUpload(c.Context(), id); err != nil {
+		if db.IsNoRows(err) {
+			return fiber.NewError(fiber.StatusNotFound, "upload not found")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	_ = h.Storage.Delete(c.Context(), upload.StoragePath)
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
 func (h *Handler) GetFight(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid id")
+	}
+	if err := h.ensureFightAccess(c, id); err != nil {
+		return err
 	}
 	fight, err := h.Store.GetFight(c.Context(), id)
 	if err != nil {
@@ -196,11 +337,8 @@ func (h *Handler) GetFightSpells(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid actorId")
 	}
 
-	if _, err := h.Store.GetFight(c.Context(), fightID); err != nil {
-		if db.IsNoRows(err) {
-			return fiber.NewError(fiber.StatusNotFound, "fight not found")
-		}
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	if err := h.ensureFightAccess(c, fightID); err != nil {
+		return err
 	}
 
 	spells, err := h.Store.ListSpellStats(c.Context(), fightID, actorID)
@@ -208,4 +346,48 @@ func (h *Handler) GetFightSpells(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	return c.JSON(spells)
+}
+
+func (h *Handler) ensureFightAccess(c fiber.Ctx, fightID uuid.UUID) error {
+	upload, err := h.Store.GetUploadByFightID(c.Context(), fightID)
+	if err != nil {
+		if db.IsNoRows(err) {
+			return fiber.NewError(fiber.StatusNotFound, "fight not found")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	if !canAccessUpload(UserFromContext(c), upload.UserID, upload.IsPrivate) {
+		return fiber.NewError(fiber.StatusNotFound, "fight not found")
+	}
+	return nil
+}
+
+func parseBoolForm(values ...string) bool {
+	for _, v := range values {
+		if parseBoolQuery(v) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseBoolQuery(v string) bool {
+	v = strings.TrimSpace(strings.ToLower(v))
+	if v == "" {
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	if err == nil {
+		return b
+	}
+	return v == "1" || v == "yes" || v == "on"
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }

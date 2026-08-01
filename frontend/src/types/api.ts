@@ -5,9 +5,11 @@
  * snake_case via normalize helpers in `api/client.ts`.
  *
  * Endpoints:
- *   POST /api/uploads              → Upload (multipart field: "file")
- *   GET  /api/uploads              → Upload[]
+ *   POST /api/uploads              → Upload (multipart: file, is_private, name) [auth]
+ *   GET  /api/uploads              → Upload[] (public + own; ?mine=1)
  *   GET  /api/uploads/:id          → Upload (with fights)
+ *   PATCH /api/uploads/:id         → Upload { name } [owner]
+ *   DELETE /api/uploads/:id        → 204 [owner]
  *   GET  /api/fights/:id           → FightDetail
  *   GET  /api/fights/:id/spells?actorId= → SpellStat[]
  *   GET  /api/health
@@ -27,10 +29,14 @@ export interface FightSummary {
 
 export interface Upload {
   id: string
+  userId?: string
+  name?: string
   filename: string
   sizeBytes: number
   status: UploadStatus
   error?: string | null
+  contentHash?: string
+  isPrivate?: boolean
   createdAt: string
   processedAt?: string | null
   fights?: FightSummary[]

@@ -2,12 +2,14 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"rg-logs/internal/wow"
@@ -24,12 +26,28 @@ const (
 
 type Upload struct {
 	ID          uuid.UUID    `json:"id"`
+	UserID      uuid.UUID    `json:"userId"`
+	Name        string       `json:"name"`
 	Filename    string       `json:"filename"`
 	SizeBytes   int64        `json:"sizeBytes"`
 	Status      UploadStatus `json:"status"`
 	Error       *string      `json:"error"`
+	ContentHash string       `json:"contentHash"`
+	IsPrivate   bool         `json:"isPrivate"`
+	StoragePath string       `json:"-"`
 	CreatedAt   time.Time    `json:"createdAt"`
 	ProcessedAt *time.Time   `json:"processedAt"`
+}
+
+type CreateUploadParams struct {
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	Name        string
+	Filename    string
+	SizeBytes   int64
+	ContentHash string
+	IsPrivate   bool
+	StoragePath string
 }
 
 type Fight struct {
@@ -104,18 +122,26 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{Pool: pool}
 }
 
-func (s *Store) CreateUpload(ctx context.Context, id uuid.UUID, filename string, sizeBytes int64) (*Upload, error) {
+func (s *Store) CreateUpload(ctx context.Context, p CreateUploadParams) (*Upload, error) {
 	u := &Upload{
-		ID:        id,
-		Filename:  filename,
-		SizeBytes: sizeBytes,
-		Status:    StatusPending,
-		CreatedAt: time.Now().UTC(),
+		ID:          p.ID,
+		UserID:      p.UserID,
+		Name:        p.Name,
+		Filename:    p.Filename,
+		SizeBytes:   p.SizeBytes,
+		Status:      StatusPending,
+		ContentHash: p.ContentHash,
+		IsPrivate:   p.IsPrivate,
+		StoragePath: p.StoragePath,
+		CreatedAt:   time.Now().UTC(),
 	}
 	_, err := s.Pool.Exec(ctx, `
-		INSERT INTO uploads (id, filename, size_bytes, status, created_at)
-		VALUES ($1, $2, $3, $4, $5)`,
-		u.ID, u.Filename, u.SizeBytes, u.Status, u.CreatedAt,
+		INSERT INTO uploads (
+			id, user_id, name, filename, size_bytes, status, created_at,
+			content_hash, is_private, storage_path
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		u.ID, u.UserID, u.Name, u.Filename, u.SizeBytes, u.Status, u.CreatedAt,
+		u.ContentHash, u.IsPrivate, u.StoragePath,
 	)
 	if err != nil {
 		return nil, err
@@ -123,11 +149,46 @@ func (s *Store) CreateUpload(ctx context.Context, id uuid.UUID, filename string,
 	return u, nil
 }
 
-func (s *Store) ListUploads(ctx context.Context) ([]Upload, error) {
-	rows, err := s.Pool.Query(ctx, `
-		SELECT id, filename, size_bytes, status, error, created_at, processed_at
-		FROM uploads
-		ORDER BY created_at DESC`)
+func (s *Store) GetUploadByUserHash(ctx context.Context, userID uuid.UUID, contentHash string) (*Upload, error) {
+	return s.scanUpload(ctx, `
+		SELECT id, user_id, name, filename, size_bytes, status, error, content_hash,
+		       is_private, storage_path, created_at, processed_at
+		FROM uploads WHERE user_id=$1 AND content_hash=$2`, userID, contentHash)
+}
+
+// ListUploads returns uploads visible to viewer: public ones plus the viewer's own.
+// If mineOnly is true, only the viewer's uploads are returned (viewer required).
+func (s *Store) ListUploads(ctx context.Context, viewerID *uuid.UUID, mineOnly bool) ([]Upload, error) {
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	switch {
+	case mineOnly:
+		if viewerID == nil {
+			return []Upload{}, nil
+		}
+		rows, err = s.Pool.Query(ctx, `
+			SELECT id, user_id, name, filename, size_bytes, status, error, content_hash,
+			       is_private, storage_path, created_at, processed_at
+			FROM uploads
+			WHERE user_id=$1
+			ORDER BY created_at DESC`, *viewerID)
+	case viewerID != nil:
+		rows, err = s.Pool.Query(ctx, `
+			SELECT id, user_id, name, filename, size_bytes, status, error, content_hash,
+			       is_private, storage_path, created_at, processed_at
+			FROM uploads
+			WHERE is_private = FALSE OR user_id=$1
+			ORDER BY created_at DESC`, *viewerID)
+	default:
+		rows, err = s.Pool.Query(ctx, `
+			SELECT id, user_id, name, filename, size_bytes, status, error, content_hash,
+			       is_private, storage_path, created_at, processed_at
+			FROM uploads
+			WHERE is_private = FALSE
+			ORDER BY created_at DESC`)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -135,11 +196,11 @@ func (s *Store) ListUploads(ctx context.Context) ([]Upload, error) {
 
 	var out []Upload
 	for rows.Next() {
-		var u Upload
-		if err := rows.Scan(&u.ID, &u.Filename, &u.SizeBytes, &u.Status, &u.Error, &u.CreatedAt, &u.ProcessedAt); err != nil {
+		u, err := scanUploadRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, u)
+		out = append(out, *u)
 	}
 	if out == nil {
 		out = []Upload{}
@@ -148,11 +209,75 @@ func (s *Store) ListUploads(ctx context.Context) ([]Upload, error) {
 }
 
 func (s *Store) GetUpload(ctx context.Context, id uuid.UUID) (*Upload, error) {
+	return s.scanUpload(ctx, `
+		SELECT id, user_id, name, filename, size_bytes, status, error, content_hash,
+		       is_private, storage_path, created_at, processed_at
+		FROM uploads WHERE id=$1`, id)
+}
+
+func (s *Store) UpdateUploadName(ctx context.Context, id uuid.UUID, name string) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE uploads SET name=$2 WHERE id=$1`, id, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// SetUploadNameIfEmpty sets name only when the current name is empty.
+func (s *Store) SetUploadNameIfEmpty(ctx context.Context, id uuid.UUID, name string) error {
+	_, err := s.Pool.Exec(ctx, `
+		UPDATE uploads SET name=$2 WHERE id=$1 AND (name = '' OR name IS NULL)`,
+		id, name,
+	)
+	return err
+}
+
+func (s *Store) DeleteUpload(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM uploads WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) GetUploadByFightID(ctx context.Context, fightID uuid.UUID) (*Upload, error) {
+	return s.scanUpload(ctx, `
+		SELECT u.id, u.user_id, u.name, u.filename, u.size_bytes, u.status, u.error, u.content_hash,
+		       u.is_private, u.storage_path, u.created_at, u.processed_at
+		FROM uploads u
+		JOIN fights f ON f.upload_id = u.id
+		WHERE f.id=$1`, fightID)
+}
+
+func (s *Store) scanUpload(ctx context.Context, query string, args ...any) (*Upload, error) {
+	row := s.Pool.QueryRow(ctx, query, args...)
 	var u Upload
-	err := s.Pool.QueryRow(ctx, `
-		SELECT id, filename, size_bytes, status, error, created_at, processed_at
-		FROM uploads WHERE id=$1`, id,
-	).Scan(&u.ID, &u.Filename, &u.SizeBytes, &u.Status, &u.Error, &u.CreatedAt, &u.ProcessedAt)
+	err := row.Scan(
+		&u.ID, &u.UserID, &u.Name, &u.Filename, &u.SizeBytes, &u.Status, &u.Error,
+		&u.ContentHash, &u.IsPrivate, &u.StoragePath, &u.CreatedAt, &u.ProcessedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanUploadRow(row rowScanner) (*Upload, error) {
+	var u Upload
+	err := row.Scan(
+		&u.ID, &u.UserID, &u.Name, &u.Filename, &u.SizeBytes, &u.Status, &u.Error,
+		&u.ContentHash, &u.IsPrivate, &u.StoragePath, &u.CreatedAt, &u.ProcessedAt,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -647,5 +772,10 @@ type PersistedFight struct {
 }
 
 func IsNoRows(err error) bool {
-	return err == pgx.ErrNoRows
+	return errors.Is(err, pgx.ErrNoRows)
+}
+
+func IsUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

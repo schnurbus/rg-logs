@@ -1,4 +1,5 @@
 import { Link, NavLink, Outlet } from 'react-router-dom'
+import { useAuth } from '../auth/AuthProvider'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   [
@@ -9,6 +10,8 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
   ].join(' ')
 
 export function Layout() {
+  const { user, loading, signOut } = useAuth()
+
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b border-border bg-surface-raised">
@@ -28,6 +31,20 @@ export function Layout() {
             <NavLink to="/uploads" className={navClass}>
               Uploads
             </NavLink>
+            {!loading && user ? (
+              <button
+                type="button"
+                onClick={() => void signOut()}
+                className="ml-2 px-3 py-1.5 text-sm text-text-muted hover:text-text"
+                title={user.email ?? user.id}
+              >
+                Abmelden
+              </button>
+            ) : !loading ? (
+              <NavLink to="/login" className={navClass}>
+                Anmelden
+              </NavLink>
+            ) : null}
           </nav>
         </div>
       </header>
