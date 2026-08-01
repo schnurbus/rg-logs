@@ -1,0 +1,336 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { ApiError, getFight, getFightSpells } from '../api/client'
+import { ErrorMessage, Loading } from '../components/ErrorMessage'
+import {
+  formatDuration,
+  formatNumber,
+  formatPercent,
+  formatRate,
+} from '../lib/format'
+import type { FightDetail, Participant, SpellStat } from '../types/api'
+
+type MetricTab = 'damage' | 'healing' | 'taken'
+
+const TABS: { id: MetricTab; label: string }[] = [
+  { id: 'damage', label: 'Damage Done' },
+  { id: 'healing', label: 'Healing Done' },
+  { id: 'taken', label: 'Damage Taken' },
+]
+
+function amountFor(p: Participant, tab: MetricTab): number {
+  switch (tab) {
+    case 'damage':
+      return p.damageDone
+    case 'healing':
+      return p.healingDone
+    case 'taken':
+      return p.damageTaken
+  }
+}
+
+function rateFor(p: Participant, tab: MetricTab): number | undefined {
+  if (tab === 'damage') return p.dps
+  if (tab === 'healing') return p.hps
+  // Damage taken rate
+  const seconds = p.activeTimeMs > 0 ? p.activeTimeMs / 1000 : 0
+  return seconds > 0 ? p.damageTaken / seconds : undefined
+}
+
+function rateLabel(tab: MetricTab): string {
+  if (tab === 'healing') return 'HPS'
+  if (tab === 'taken') return 'DTPS'
+  return 'DPS'
+}
+
+export function FightDetailPage() {
+  const { fightId } = useParams<{ fightId: string }>()
+  const [fight, setFight] = useState<FightDetail | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [tab, setTab] = useState<MetricTab>('damage')
+  const [selected, setSelected] = useState<Participant | null>(null)
+  const [spells, setSpells] = useState<SpellStat[] | null>(null)
+  const [spellsError, setSpellsError] = useState<string | null>(null)
+  const [spellsLoading, setSpellsLoading] = useState(false)
+
+  const load = useCallback(async () => {
+    if (!fightId) return
+    try {
+      const data = await getFight(fightId)
+      setFight(data)
+      setError(null)
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? `Fight nicht geladen (${err.status})`
+          : err instanceof Error
+            ? err.message
+            : 'Unbekannter Fehler',
+      )
+    }
+  }, [fightId])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  useEffect(() => {
+    setSelected(null)
+    setSpells(null)
+    setSpellsError(null)
+  }, [tab])
+
+  const sorted = useMemo(() => {
+    if (!fight) return []
+    return [...fight.participants].sort(
+      (a, b) => amountFor(b, tab) - amountFor(a, tab),
+    )
+  }, [fight, tab])
+
+  const total = useMemo(
+    () => sorted.reduce((sum, p) => sum + amountFor(p, tab), 0),
+    [sorted, tab],
+  )
+
+  const openSpells = async (p: Participant) => {
+    if (!fightId) return
+    setSelected(p)
+    setSpells(null)
+    setSpellsError(null)
+    setSpellsLoading(true)
+    try {
+      const data = await getFightSpells(fightId, p.actorId)
+      // Prefer spells matching current metric; fall back to all
+      const metricFilter =
+        tab === 'damage'
+          ? 'damage'
+          : tab === 'healing'
+            ? 'healing'
+            : 'damage_taken'
+      const filtered = data.filter((s) => s.metric === metricFilter)
+      const list = (filtered.length > 0 ? filtered : data).sort(
+        (a, b) => b.total - a.total,
+      )
+      setSpells(list)
+    } catch (err) {
+      setSpellsError(
+        err instanceof ApiError
+          ? `Spell-Breakdown fehlgeschlagen (${err.status})`
+          : err instanceof Error
+            ? err.message
+            : 'Unbekannter Fehler',
+      )
+    } finally {
+      setSpellsLoading(false)
+    }
+  }
+
+  if (error && !fight) {
+    return <ErrorMessage message={error} onRetry={load} />
+  }
+
+  if (!fight) {
+    return <Loading label="Fight laden…" />
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <p className="text-xs text-text-muted">
+          {fight.uploadId ? (
+            <>
+              <Link to={`/uploads/${fight.uploadId}`}>Upload</Link>
+              <span className="mx-1.5">/</span>
+            </>
+          ) : (
+            <>
+              <Link to="/uploads">Uploads</Link>
+              <span className="mx-1.5">/</span>
+            </>
+          )}
+          <span className="text-text">{fight.title}</span>
+        </p>
+        <h1 className="mt-2 text-xl font-semibold tracking-tight">
+          {fight.title || 'Fight'}
+        </h1>
+        <p className="mt-1 text-sm text-text-muted">
+          Dauer {formatDuration(fight.durationMs)}
+          {fight.kill ? ' · Kill' : ''}
+          {' · '}
+          {fight.participantCount} Teilnehmer
+        </p>
+      </div>
+
+      <div
+        role="tablist"
+        className="flex flex-wrap gap-1 border-b border-border pb-px"
+      >
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            onClick={() => setTab(t.id)}
+            className={[
+              'rounded-t px-3 py-2 text-sm transition-colors',
+              tab === t.id
+                ? 'bg-surface-overlay text-text ring-1 ring-border'
+                : 'text-text-muted hover:text-text',
+            ].join(' ')}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="overflow-x-auto rounded border border-border">
+        <table className="w-full min-w-[640px] border-collapse text-left text-sm">
+          <thead className="bg-surface-raised text-xs uppercase tracking-wide text-text-muted">
+            <tr>
+              <th className="px-3 py-2 font-medium w-8">#</th>
+              <th className="px-3 py-2 font-medium">Name</th>
+              <th className="px-3 py-2 font-medium text-right">Amount</th>
+              <th className="px-3 py-2 font-medium text-right">
+                {rateLabel(tab)}
+              </th>
+              <th className="px-3 py-2 font-medium text-right">%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((p, i) => {
+              const amount = amountFor(p, tab)
+              const rate = rateFor(p, tab)
+              const pct = total > 0 ? amount / total : 0
+              const active = selected?.actorId === p.actorId
+              return (
+                <tr
+                  key={p.actorId || `${p.name}-${i}`}
+                  onClick={() => void openSpells(p)}
+                  className={[
+                    'border-t border-border-subtle cursor-pointer',
+                    active
+                      ? 'bg-surface-overlay'
+                      : 'hover:bg-surface-overlay/50',
+                  ].join(' ')}
+                >
+                  <td className="px-3 py-2 text-text-muted">{i + 1}</td>
+                  <td className="px-3 py-2">
+                    <span className="font-medium text-text">{p.name}</span>
+                    {!p.isPlayer ? (
+                      <span className="ml-2 text-xs text-text-muted">NPC</span>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono">
+                    {formatNumber(amount)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-text-muted">
+                    {formatRate(rate)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-text-muted">
+                    {formatPercent(pct)}
+                  </td>
+                </tr>
+              )
+            })}
+            {sorted.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="px-3 py-6 text-center text-text-muted"
+                >
+                  Keine Teilnehmer.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+
+      {selected ? (
+        <section className="rounded border border-border bg-surface-raised p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold">
+              Spell-Breakdown:{' '}
+              <span className="text-accent">{selected.name}</span>
+            </h2>
+            <button
+              type="button"
+              className="text-xs text-text-muted hover:text-text"
+              onClick={() => {
+                setSelected(null)
+                setSpells(null)
+                setSpellsError(null)
+              }}
+            >
+              Schließen
+            </button>
+          </div>
+
+          {spellsLoading ? <Loading label="Spells laden…" /> : null}
+          {spellsError ? <ErrorMessage message={spellsError} /> : null}
+
+          {spells && spells.length === 0 ? (
+            <p className="text-sm text-text-muted">Keine Spell-Stats.</p>
+          ) : null}
+
+          {spells && spells.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[480px] border-collapse text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-text-muted">
+                  <tr>
+                    <th className="px-2 py-1.5 font-medium">Spell</th>
+                    <th className="px-2 py-1.5 font-medium text-right">
+                      Total
+                    </th>
+                    <th className="px-2 py-1.5 font-medium text-right">Hits</th>
+                    <th className="px-2 py-1.5 font-medium text-right">
+                      Crits
+                    </th>
+                    <th className="px-2 py-1.5 font-medium text-right">%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const spellTotal = spells.reduce((s, x) => s + x.total, 0)
+                    return spells.map((s) => (
+                      <tr
+                        key={`${s.spellId}-${s.metric}-${s.spellName}`}
+                        className="border-t border-border-subtle"
+                      >
+                        <td className="px-2 py-1.5">
+                          <span className="text-text">{s.spellName}</span>
+                          <span className="ml-2 font-mono text-xs text-text-muted">
+                            {s.spellId}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono">
+                          {formatNumber(s.total)}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono text-text-muted">
+                          {formatNumber(s.hits)}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono text-text-muted">
+                          {formatNumber(s.crits)}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono text-text-muted">
+                          {formatPercent(
+                            spellTotal > 0 ? s.total / spellTotal : 0,
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </section>
+      ) : (
+        <p className="text-xs text-text-muted">
+          Zeile anklicken für Spell-Breakdown.
+        </p>
+      )}
+    </div>
+  )
+}

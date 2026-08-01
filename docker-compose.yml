@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rglogs-postgres
+    environment:
+      POSTGRES_USER: rglogs
+      POSTGRES_PASSWORD: rglogs
+      POSTGRES_DB: rglogs
+    ports:
+      - "5432:5432"
+    volumes:
+      - rglogs_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rglogs -d rglogs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  rglogs_pgdata:

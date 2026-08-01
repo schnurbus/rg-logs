@@ -1,0 +1,28 @@
+# Uploads (persisted logs)
+uploads/*
+!uploads/.gitkeep
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Go
+backend/bin/
+backend/tmp/
+*.exe
+*.test
+*.out
+vendor/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
