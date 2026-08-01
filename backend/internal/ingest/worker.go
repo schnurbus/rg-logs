@@ -199,21 +199,30 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 			}
 			pf.ActorIDs[actorID] = struct{}{}
 			pf.Spells = append(pf.Spells, db.PersistedSpellStat{
-				ActorID:   actorID,
-				SpellID:   sp.SpellID,
-				SpellName: sp.SpellName,
-				School:    sp.School,
-				Metric:    string(sp.Metric),
-				Total:     sp.Total,
-				Hits:      sp.Hits,
-				Crits:     sp.Crits,
-				Ticks:     sp.Ticks,
+				ActorID:       actorID,
+				SpellID:       sp.SpellID,
+				SpellName:     sp.SpellName,
+				School:        sp.School,
+				Metric:        string(sp.Metric),
+				Total:         sp.Total,
+				Hits:          sp.Hits,
+				Crits:         sp.Crits,
+				Ticks:         sp.Ticks,
+				Misses:        sp.Misses,
+				Glancing:      sp.Glancing,
+				NormalHits:    sp.Normal.Hits,
+				NormalTotal:   sp.Normal.Total,
+				NormalMin:     sp.Normal.Min,
+				NormalMax:     sp.Normal.Max,
+				CritTotal:     sp.Crit.Total,
+				CritMin:       sp.Crit.Min,
+				CritMax:       sp.Crit.Max,
+				GlancingTotal: sp.Glance.Total,
+				GlancingMin:   sp.Glance.Min,
+				GlancingMax:   sp.Glance.Max,
 			})
 		}
 
-		if pf.ParticipantCount == 0 {
-			pf.ParticipantCount = len(pf.ActorIDs)
-		}
 		fights = append(fights, pf)
 	}
 

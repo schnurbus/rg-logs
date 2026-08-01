@@ -119,6 +119,9 @@ func TestPetDamageStaysOnPetWithPlayerOwner(t *testing.T) {
 	if playerAgg.DamageDone != 500 {
 		t.Fatalf("player own damage=%d, want 500", playerAgg.DamageDone)
 	}
+	if f.ParticipantCount != 1 {
+		t.Fatalf("participantCount=%d, want 1 (player only, not pet)", f.ParticipantCount)
+	}
 }
 
 func TestFightGapSegmentation(t *testing.T) {
@@ -193,5 +196,80 @@ func TestParseReferenceLogSmoke(t *testing.T) {
 	for i, f := range res.Fights {
 		t.Logf("fight[%d] title=%s dur=%dms events=%d participants=%d kill=%v",
 			i, f.Title, f.DurationMs, f.EventCount, f.ParticipantCount, f.Kill)
+	}
+}
+
+func TestSpellHitDetails(t *testing.T) {
+	snippet := strings.Join([]string{
+		`8/1 08:45:16.653  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,1000,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:17.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,800,0,1,0,0,0,nil,1,nil`,
+		`8/1 08:45:18.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,2000,0,1,0,0,0,1,nil,nil`,
+		`8/1 08:45:19.000  SWING_MISSED,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,MISS`,
+		`8/1 08:45:20.000  SWING_MISSED,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,DODGE`,
+		`8/1 08:45:21.000  SPELL_DAMAGE,0x000000000070F5A4,"Floriniâ",0x512,0xF130006C590000BA,"Zombie",0xa48,42921,"Arkane Explosion",0x40,1320,0,64,0,0,0,nil,nil,nil`,
+		`8/1 08:45:22.000  SPELL_DAMAGE,0x000000000070F5A4,"Floriniâ",0x512,0xF130006C590000BA,"Zombie",0xa48,42921,"Arkane Explosion",0x40,2450,0,64,0,0,0,1,nil,nil`,
+		`8/1 08:45:23.000  SPELL_MISSED,0x000000000070F5A4,"Floriniâ",0x512,0xF130006C590000BA,"Zombie",0xa48,42921,"Arkane Explosion",0x40,MISS`,
+		`8/1 08:45:24.000  SPELL_MISSED,0x000000000070F5A4,"Floriniâ",0x512,0xF130006C590000BA,"Zombie",0xa48,42921,"Arkane Explosion",0x40,RESIST`,
+		`8/1 08:45:25.000  SPELL_DAMAGE,0x000000000070F5A4,"Floriniâ",0x512,0xF130006C590000BA,"Zombie",0xa48,42921,"Arkane Explosion",0x40,1500,0,64,0,0,0,nil,nil,nil`,
+		`8/1 08:45:40.000  UNIT_DIED,0x0000000000000000,nil,0x80000000,0xF130006C590000BA,"Zombie",0xa48`,
+	}, "\n")
+
+	res, err := parser.Parse(strings.NewReader(snippet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Fights) != 1 {
+		t.Fatalf("expected 1 fight, got %d", len(res.Fights))
+	}
+	f := res.Fights[0]
+
+	const (
+		deaklot  = "0x00000000002A0928"
+		florinia = "0x000000000070F5A4"
+	)
+
+	var melee, ae *parser.SpellAgg
+	for _, sp := range f.Spells {
+		if sp.ActorGUID == deaklot && sp.SpellID == parser.SpellMeleeID && sp.Metric == parser.MetricDamage {
+			melee = sp
+		}
+		if sp.ActorGUID == florinia && sp.SpellID == 42921 && sp.Metric == parser.MetricDamage {
+			ae = sp
+		}
+	}
+
+	if melee == nil {
+		t.Fatal("expected melee spell agg")
+	}
+	if melee.Hits != 3 || melee.Crits != 1 || melee.Glancing != 1 || melee.Misses != 1 {
+		t.Fatalf("melee hits=%d crits=%d glancing=%d misses=%d", melee.Hits, melee.Crits, melee.Glancing, melee.Misses)
+	}
+	if melee.Total != 3800 {
+		t.Fatalf("melee total=%d", melee.Total)
+	}
+	if melee.Normal.Hits != 1 || melee.Normal.Min != 1000 || melee.Normal.Max != 1000 {
+		t.Fatalf("melee normal=%+v", melee.Normal)
+	}
+	if melee.Glance.Hits != 1 || melee.Glance.Min != 800 || melee.Glance.Max != 800 {
+		t.Fatalf("melee glance=%+v", melee.Glance)
+	}
+	if melee.Crit.Hits != 1 || melee.Crit.Min != 2000 || melee.Crit.Max != 2000 {
+		t.Fatalf("melee crit=%+v", melee.Crit)
+	}
+
+	if ae == nil {
+		t.Fatal("expected AE spell agg")
+	}
+	if ae.Hits != 3 || ae.Crits != 1 || ae.Misses != 1 || ae.Glancing != 0 {
+		t.Fatalf("ae hits=%d crits=%d misses=%d glancing=%d", ae.Hits, ae.Crits, ae.Misses, ae.Glancing)
+	}
+	if ae.Total != 1320+2450+1500 {
+		t.Fatalf("ae total=%d", ae.Total)
+	}
+	if ae.Normal.Hits != 2 || ae.Normal.Min != 1320 || ae.Normal.Max != 1500 {
+		t.Fatalf("ae normal=%+v", ae.Normal)
+	}
+	if ae.Crit.Hits != 1 || ae.Crit.Min != 2450 || ae.Crit.Max != 2450 {
+		t.Fatalf("ae crit=%+v", ae.Crit)
 	}
 }

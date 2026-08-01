@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { ApiError, getFight, getFightSpells } from '../api/client'
 import { ErrorMessage, Loading } from '../components/ErrorMessage'
 import { MeterBar } from '../components/MeterBar'
+import { SpellStatTooltip } from '../components/SpellStatTooltip'
 import {
   asPlayerClass,
   classTextStyle,
@@ -28,7 +29,6 @@ type MeterRow = {
   player: Participant
   /** Player stats with pet damage/healing/taken rolled into totals */
   totals: Participant
-  pets: Participant[]
 }
 
 function amountFor(p: Participant, tab: MetricTab): number {
@@ -67,7 +67,7 @@ function playerClassOf(p: Participant): PlayerClass | undefined {
   return asPlayerClass(p.class)
 }
 
-/** Group player pets under their owners; roll pet damage into player totals. NPCs omitted. */
+/** Roll pet damage into player totals. Pets are not listed separately. */
 function buildMeterRows(
   participants: Participant[],
   durationMs: number,
@@ -87,9 +87,7 @@ function buildMeterRows(
   const secs = durationMs > 0 ? durationMs / 1000 : 0
 
   return players.map((player) => {
-    const pets = [...(petsByOwner.get(player.guid) ?? [])].sort(
-      (a, b) => b.damageDone - a.damageDone,
-    )
+    const pets = petsByOwner.get(player.guid) ?? []
     const damageDone =
       player.damageDone + pets.reduce((s, pet) => s + pet.damageDone, 0)
     const healingDone =
@@ -109,7 +107,7 @@ function buildMeterRows(
       hps: secs > 0 ? Math.max(0, healingDone - overheal) / secs : undefined,
     }
 
-    return { player, totals, pets }
+    return { player, totals }
   })
 }
 
@@ -277,18 +275,15 @@ export function FightDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.flatMap((row, i) => {
+            {rows.map((row, i) => {
               const amount = amountFor(row.totals, tab)
               const rate = rateFor(row.totals, tab, fight.durationMs)
               const pct = total > 0 ? amount / total : 0
               const barRatio = maxAmount > 0 ? amount / maxAmount : 0
               const cls = playerClassOf(row.player)
               const active = selected?.actorId === row.player.actorId
-              const visiblePets = row.pets.filter(
-                (pet) => amountFor(pet, tab) > 0,
-              )
 
-              const playerRow = (
+              return (
                 <tr
                   key={row.player.actorId || `${row.player.name}-${i}`}
                   onClick={() => void openSpells(row.player)}
@@ -321,57 +316,6 @@ export function FightDetailPage() {
                   </td>
                 </tr>
               )
-
-              const petRows = visiblePets.map((pet) => {
-                const petAmount = amountFor(pet, tab)
-                const petRate = rateFor(pet, tab, fight.durationMs)
-                const petPct = total > 0 ? petAmount / total : 0
-                const petBarRatio = maxAmount > 0 ? petAmount / maxAmount : 0
-                const petCls = playerClassOf(pet) ?? cls
-                const petActive = selected?.actorId === pet.actorId
-                return (
-                  <tr
-                    key={pet.actorId || `${pet.name}-pet`}
-                    onClick={() => void openSpells(pet)}
-                    className={[
-                      'border-t border-border-subtle cursor-pointer',
-                      petActive
-                        ? 'bg-surface-overlay'
-                        : 'hover:bg-surface-overlay/50',
-                    ].join(' ')}
-                  >
-                    <td className="px-3 py-2 text-text-muted" />
-                    <td className="py-1.5 pl-6 pr-1">
-                      <MeterBar
-                        ratio={petBarRatio}
-                        playerClass={petCls}
-                        muted
-                      >
-                        <span
-                          className="text-sm"
-                          style={classTextStyle(petCls)}
-                        >
-                          {pet.name}
-                        </span>
-                        <span className="ml-2 text-xs text-text-muted">
-                          Pet
-                        </span>
-                      </MeterBar>
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-text-muted">
-                      {formatNumber(petAmount)}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-text-muted">
-                      {formatRate(petRate)}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-text-muted">
-                      {formatPercent(petPct)}
-                    </td>
-                  </tr>
-                )
-              })
-
-              return [playerRow, ...petRows]
             })}
             {rows.length === 0 ? (
               <tr>
@@ -393,11 +337,6 @@ export function FightDetailPage() {
             <h2 className="text-sm font-semibold">
               Spell-Breakdown:{' '}
               <span style={classTextStyle(selectedClass)}>{selected.name}</span>
-              {selected.ownerGuid ? (
-                <span className="ml-2 text-xs font-normal text-text-muted">
-                  Pet
-                </span>
-              ) : null}
             </h2>
             <button
               type="button"
@@ -420,7 +359,7 @@ export function FightDetailPage() {
           ) : null}
 
           {spells && spells.length > 0 ? (
-            <div className="overflow-x-auto">
+            <div>
               <table className="w-full min-w-[480px] border-collapse text-left text-sm">
                 <thead className="text-xs uppercase tracking-wide text-text-muted">
                   <tr>
@@ -453,11 +392,18 @@ export function FightDetailPage() {
                           <MeterBar
                             ratio={spellMax > 0 ? s.total / spellMax : 0}
                             playerClass={selectedClass}
+                            tooltip={<SpellStatTooltip spell={s} />}
                           >
                             <span className="text-text">{s.spellName}</span>
-                            <span className="ml-2 font-mono text-xs text-text-muted">
-                              {s.spellId}
-                            </span>
+                            {s.pet ? (
+                              <span className="ml-2 text-xs text-text-muted">
+                                Pet
+                              </span>
+                            ) : (
+                              <span className="ml-2 font-mono text-xs text-text-muted">
+                                {s.spellId}
+                              </span>
+                            )}
                           </MeterBar>
                         </td>
                         <td className="px-2 py-1.5 text-right font-mono">

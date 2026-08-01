@@ -9,6 +9,8 @@ type MeterBarProps = {
   /** Slightly dimmer bar for nested pet rows */
   muted?: boolean
   className?: string
+  /** Rich hover details (e.g. spell hit breakdown). */
+  tooltip?: ReactNode
 }
 
 /**
@@ -21,6 +23,7 @@ export function MeterBar({
   children,
   muted,
   className,
+  tooltip,
 }: MeterBarProps) {
   const bar = classBarStyle(playerClass, ratio)
   const fillStyle: CSSProperties = {
@@ -30,7 +33,11 @@ export function MeterBar({
 
   return (
     <div
-      className={['relative min-w-0 overflow-hidden', className]
+      className={[
+        'relative min-w-0',
+        tooltip ? 'group/meter overflow-visible' : 'overflow-hidden',
+        className,
+      ]
         .filter(Boolean)
         .join(' ')}
     >
@@ -40,6 +47,14 @@ export function MeterBar({
         style={fillStyle}
       />
       <div className="relative z-10 px-2 py-0.5">{children}</div>
+      {tooltip ? (
+        <div
+          role="tooltip"
+          className="pointer-events-none absolute bottom-full left-0 z-30 mb-1 hidden min-w-[12rem] max-w-xs rounded border border-border bg-surface-overlay px-2.5 py-2 text-xs text-text shadow-lg group-hover/meter:block"
+        >
+          {tooltip}
+        </div>
+      ) : null}
     </div>
   )
 }

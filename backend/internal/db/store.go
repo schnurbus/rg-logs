@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,14 +72,28 @@ type ActorStat struct {
 }
 
 type SpellStat struct {
-	SpellID   int    `json:"spellId"`
-	SpellName string `json:"spellName"`
-	School    int    `json:"school"`
-	Metric    string `json:"metric"`
-	Total     int64  `json:"total"`
-	Hits      int    `json:"hits"`
-	Crits     int    `json:"crits"`
-	Ticks     int    `json:"ticks"`
+	SpellID        int    `json:"spellId"`
+	SpellName      string `json:"spellName"`
+	School         int    `json:"school"`
+	Metric         string `json:"metric"`
+	Total          int64  `json:"total"`
+	Hits           int    `json:"hits"`
+	Crits          int    `json:"crits"`
+	Ticks          int    `json:"ticks"`
+	Misses         int    `json:"misses"`
+	Glancing       int    `json:"glancing"`
+	NormalHits     int    `json:"normalHits"`
+	NormalTotal    int64  `json:"normalTotal"`
+	NormalMin      int64  `json:"normalMin"`
+	NormalMax      int64  `json:"normalMax"`
+	CritTotal      int64  `json:"critTotal"`
+	CritMin        int64  `json:"critMin"`
+	CritMax        int64  `json:"critMax"`
+	GlancingTotal int64  `json:"glancingTotal"`
+	GlancingMin   int64  `json:"glancingMin"`
+	GlancingMax   int64  `json:"glancingMax"`
+	// Pet is true when this row aggregates a pet/summon by name under its owner.
+	Pet bool `json:"pet,omitempty"`
 }
 
 type Store struct {
@@ -161,9 +176,18 @@ func (s *Store) SetUploadStatus(ctx context.Context, id uuid.UUID, status Upload
 
 func (s *Store) ListFightsByUpload(ctx context.Context, uploadID uuid.UUID) ([]Fight, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT id, upload_id, start_ts, end_ts, duration_ms, title, "kill", participant_count
-		FROM fights WHERE upload_id=$1
-		ORDER BY start_ts ASC`, uploadID)
+		SELECT f.id, f.upload_id, f.start_ts, f.end_ts, f.duration_ms, f.title, f."kill",
+		       (
+		         SELECT COUNT(*)::int
+		         FROM actor_stats s
+		         JOIN actors a ON a.id = s.actor_id
+		         WHERE s.fight_id = f.id
+		           AND a.is_player
+		           AND (s.damage_done > 0 OR s.healing_done > 0 OR s.damage_taken > 0)
+		       ) AS participant_count
+		FROM fights f
+		WHERE f.upload_id=$1
+		ORDER BY f.start_ts ASC`, uploadID)
 	if err != nil {
 		return nil, err
 	}
@@ -186,8 +210,17 @@ func (s *Store) ListFightsByUpload(ctx context.Context, uploadID uuid.UUID) ([]F
 func (s *Store) GetFight(ctx context.Context, id uuid.UUID) (*Fight, error) {
 	var f Fight
 	err := s.Pool.QueryRow(ctx, `
-		SELECT id, upload_id, start_ts, end_ts, duration_ms, title, "kill", participant_count
-		FROM fights WHERE id=$1`, id,
+		SELECT f.id, f.upload_id, f.start_ts, f.end_ts, f.duration_ms, f.title, f."kill",
+		       (
+		         SELECT COUNT(*)::int
+		         FROM actor_stats s
+		         JOIN actors a ON a.id = s.actor_id
+		         WHERE s.fight_id = f.id
+		           AND a.is_player
+		           AND (s.damage_done > 0 OR s.healing_done > 0 OR s.damage_taken > 0)
+		       ) AS participant_count
+		FROM fights f
+		WHERE f.id=$1`, id,
 	).Scan(&f.ID, &f.UploadID, &f.StartTs, &f.EndTs, &f.DurationMs, &f.Title, &f.Kill, &f.ParticipantCount)
 	if err != nil {
 		return nil, err
@@ -327,12 +360,29 @@ func (s *Store) propagateOwnerClass(stats []ActorStat) {
 	}
 }
 
+func scanSpellStat(scan func(dest ...any) error) (SpellStat, error) {
+	var sp SpellStat
+	err := scan(
+		&sp.SpellID, &sp.SpellName, &sp.School, &sp.Metric,
+		&sp.Total, &sp.Hits, &sp.Crits, &sp.Ticks, &sp.Misses, &sp.Glancing,
+		&sp.NormalHits, &sp.NormalTotal, &sp.NormalMin, &sp.NormalMax,
+		&sp.CritTotal, &sp.CritMin, &sp.CritMax,
+		&sp.GlancingTotal, &sp.GlancingMin, &sp.GlancingMax,
+	)
+	return sp, err
+}
+
+const spellStatColumns = `
+	spell_id, spell_name, school, metric, total, hits, crits, ticks, misses, glancing,
+	normal_hits, normal_total, normal_min, normal_max,
+	crit_total, crit_min, crit_max,
+	glancing_total, glancing_min, glancing_max`
+
 func (s *Store) ListSpellStats(ctx context.Context, fightID, actorID uuid.UUID) ([]SpellStat, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT spell_id, spell_name, school, metric, total, hits, crits, ticks
+		SELECT `+spellStatColumns+`
 		FROM spell_stats
-		WHERE fight_id=$1 AND actor_id=$2
-		ORDER BY total DESC`, fightID, actorID)
+		WHERE fight_id=$1 AND actor_id=$2`, fightID, actorID)
 	if err != nil {
 		return nil, err
 	}
@@ -340,14 +390,96 @@ func (s *Store) ListSpellStats(ctx context.Context, fightID, actorID uuid.UUID) 
 
 	var out []SpellStat
 	for rows.Next() {
-		var sp SpellStat
-		if err := rows.Scan(&sp.SpellID, &sp.SpellName, &sp.School, &sp.Metric, &sp.Total, &sp.Hits, &sp.Crits, &sp.Ticks); err != nil {
+		sp, err := scanSpellStat(rows.Scan)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, sp)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	pets, err := s.listPetSpellAggregates(ctx, fightID, actorID)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, pets...)
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Total > out[j].Total })
 	if out == nil {
 		out = []SpellStat{}
+	}
+	return out, nil
+}
+
+// listPetSpellAggregates rolls all spells of owned pets/summons into one row per
+// pet name + metric (e.g. three Treants → one "Treant" damage line).
+func (s *Store) listPetSpellAggregates(ctx context.Context, fightID, actorID uuid.UUID) ([]SpellStat, error) {
+	var ownerGUID string
+	var isPlayer bool
+	err := s.Pool.QueryRow(ctx, `
+		SELECT a.guid, a.is_player
+		FROM actors a
+		JOIN fight_actors fa ON fa.actor_id = a.id
+		WHERE fa.fight_id=$1 AND a.id=$2`, fightID, actorID,
+	).Scan(&ownerGUID, &isPlayer)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !isPlayer || ownerGUID == "" {
+		return nil, nil
+	}
+
+	rows, err := s.Pool.Query(ctx, `
+		SELECT
+			0 AS spell_id,
+			p.name AS spell_name,
+			0 AS school,
+			ss.metric,
+			COALESCE(SUM(ss.total), 0),
+			COALESCE(SUM(ss.hits), 0)::int,
+			COALESCE(SUM(ss.crits), 0)::int,
+			COALESCE(SUM(ss.ticks), 0)::int,
+			COALESCE(SUM(ss.misses), 0)::int,
+			COALESCE(SUM(ss.glancing), 0)::int,
+			COALESCE(SUM(ss.normal_hits), 0)::int,
+			COALESCE(SUM(ss.normal_total), 0),
+			COALESCE(MIN(ss.normal_min) FILTER (WHERE ss.normal_hits > 0), 0),
+			COALESCE(MAX(ss.normal_max) FILTER (WHERE ss.normal_hits > 0), 0),
+			COALESCE(SUM(ss.crit_total), 0),
+			COALESCE(MIN(ss.crit_min) FILTER (WHERE ss.crits > 0), 0),
+			COALESCE(MAX(ss.crit_max) FILTER (WHERE ss.crits > 0), 0),
+			COALESCE(SUM(ss.glancing_total), 0),
+			COALESCE(MIN(ss.glancing_min) FILTER (WHERE ss.glancing > 0), 0),
+			COALESCE(MAX(ss.glancing_max) FILTER (WHERE ss.glancing > 0), 0)
+		FROM spell_stats ss
+		JOIN actors p ON p.id = ss.actor_id
+		JOIN fights f ON f.id = ss.fight_id
+		WHERE ss.fight_id = $1
+		  AND p.upload_id = f.upload_id
+		  AND p.owner_guid = $2
+		  AND p.is_player = FALSE
+		GROUP BY p.name, ss.metric
+		HAVING SUM(ss.total) > 0 OR SUM(ss.hits) > 0 OR SUM(ss.misses) > 0`,
+		fightID, ownerGUID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SpellStat
+	for rows.Next() {
+		sp, err := scanSpellStat(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		sp.Pet = true
+		out = append(out, sp)
 	}
 	return out, rows.Err()
 }
@@ -406,10 +538,24 @@ func (s *Store) PersistParseResult(ctx context.Context, uploadID uuid.UUID, acto
 		}
 
 		for _, sp := range f.Spells {
+			minAmount, maxAmount := overallMinMax(sp)
 			_, err := tx.Exec(ctx, `
-				INSERT INTO spell_stats (fight_id, actor_id, spell_id, spell_name, school, metric, total, hits, crits, ticks)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-				f.ID, sp.ActorID, sp.SpellID, sp.SpellName, sp.School, sp.Metric, sp.Total, sp.Hits, sp.Crits, sp.Ticks,
+				INSERT INTO spell_stats (
+					fight_id, actor_id, spell_id, spell_name, school, metric,
+					total, hits, crits, ticks, min_amount, max_amount, misses, glancing,
+					normal_hits, normal_total, normal_min, normal_max,
+					crit_total, crit_min, crit_max,
+					glancing_total, glancing_min, glancing_max
+				)
+				VALUES (
+					$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+					$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
+				)`,
+				f.ID, sp.ActorID, sp.SpellID, sp.SpellName, sp.School, sp.Metric,
+				sp.Total, sp.Hits, sp.Crits, sp.Ticks, minAmount, maxAmount, sp.Misses, sp.Glancing,
+				sp.NormalHits, sp.NormalTotal, sp.NormalMin, sp.NormalMax,
+				sp.CritTotal, sp.CritMin, sp.CritMax,
+				sp.GlancingTotal, sp.GlancingMin, sp.GlancingMax,
 			)
 			if err != nil {
 				return fmt.Errorf("insert spell_stats: %w", err)
@@ -440,15 +586,51 @@ type PersistedFightStat struct {
 }
 
 type PersistedSpellStat struct {
-	ActorID   uuid.UUID
-	SpellID   int
-	SpellName string
-	School    int
-	Metric    string
-	Total     int64
-	Hits      int
-	Crits     int
-	Ticks     int
+	ActorID       uuid.UUID
+	SpellID       int
+	SpellName     string
+	School        int
+	Metric        string
+	Total         int64
+	Hits          int
+	Crits         int
+	Ticks         int
+	Misses        int
+	Glancing      int
+	NormalHits    int
+	NormalTotal   int64
+	NormalMin     int64
+	NormalMax     int64
+	CritTotal     int64
+	CritMin       int64
+	CritMax       int64
+	GlancingTotal int64
+	GlancingMin   int64
+	GlancingMax   int64
+}
+
+func overallMinMax(sp PersistedSpellStat) (min, max int64) {
+	first := true
+	consider := func(hits int, lo, hi int64) {
+		if hits <= 0 {
+			return
+		}
+		if first {
+			min, max = lo, hi
+			first = false
+			return
+		}
+		if lo < min {
+			min = lo
+		}
+		if hi > max {
+			max = hi
+		}
+	}
+	consider(sp.NormalHits, sp.NormalMin, sp.NormalMax)
+	consider(sp.Crits, sp.CritMin, sp.CritMax)
+	consider(sp.Glancing, sp.GlancingMin, sp.GlancingMax)
+	return min, max
 }
 
 type PersistedFight struct {

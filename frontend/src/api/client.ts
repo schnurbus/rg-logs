@@ -154,6 +154,20 @@ export function normalizeSpellStat(raw: unknown): SpellStat {
     total: asNumber(pick(o, 'total', 'total')),
     hits: asNumber(pick(o, 'hits', 'hits')),
     crits: asNumber(pick(o, 'crits', 'crits')),
+    ticks: asNumber(pick(o, 'ticks', 'ticks')),
+    misses: asNumber(pick(o, 'misses', 'misses')),
+    glancing: asNumber(pick(o, 'glancing', 'glancing')),
+    normalHits: asNumber(pick(o, 'normalHits', 'normal_hits')),
+    normalTotal: asNumber(pick(o, 'normalTotal', 'normal_total')),
+    normalMin: asNumber(pick(o, 'normalMin', 'normal_min')),
+    normalMax: asNumber(pick(o, 'normalMax', 'normal_max')),
+    critTotal: asNumber(pick(o, 'critTotal', 'crit_total')),
+    critMin: asNumber(pick(o, 'critMin', 'crit_min')),
+    critMax: asNumber(pick(o, 'critMax', 'crit_max')),
+    glancingTotal: asNumber(pick(o, 'glancingTotal', 'glancing_total')),
+    glancingMin: asNumber(pick(o, 'glancingMin', 'glancing_min')),
+    glancingMax: asNumber(pick(o, 'glancingMax', 'glancing_max')),
+    pet: Boolean(pick(o, 'pet', 'pet')),
   }
 }
 

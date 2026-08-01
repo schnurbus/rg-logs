@@ -71,4 +71,21 @@ export interface SpellStat {
   total: number
   hits: number
   crits: number
+  ticks?: number
+  /** Count of MISS outcomes (not dodge/parry/etc.). */
+  misses: number
+  /** Count of glancing hits. */
+  glancing: number
+  normalHits: number
+  normalTotal: number
+  normalMin: number
+  normalMax: number
+  critTotal: number
+  critMin: number
+  critMax: number
+  glancingTotal: number
+  glancingMin: number
+  glancingMax: number
+  /** Aggregated pet/summon contribution under the owner. */
+  pet?: boolean
 }
