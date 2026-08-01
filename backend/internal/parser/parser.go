@@ -115,6 +115,7 @@ func Parse(r io.Reader) (*ParseResult, error) {
 }
 
 func (p *Parser) Result() *ParseResult {
+	p.finalizeOwners()
 	actors := make([]*ActorInfo, 0, len(p.actors))
 	for _, a := range p.actors {
 		actors = append(actors, a)
@@ -221,16 +222,14 @@ func (p *Parser) closeFight() {
 
 	count := 0
 	for guid, agg := range f.Actors {
-		if agg.DamageDone == 0 && agg.HealingDone == 0 {
+		if agg.DamageDone == 0 && agg.HealingDone == 0 && agg.DamageTaken == 0 {
 			continue
 		}
 		info := p.actors[guid]
-		if info == nil {
+		if info == nil || !info.IsPlayer {
 			continue
 		}
-		if info.IsPlayer || info.OwnerGUID != "" || (info.Flags&FlagPet) != 0 {
-			count++
-		}
+		count++
 	}
 	f.ParticipantCount = count
 	p.fights = append(p.fights, f)
@@ -286,19 +285,50 @@ func (p *Parser) resolveSource(guid, name string, flags int64) string {
 	if a == nil {
 		return ""
 	}
-	// Attribute pet/guardian damage & healing to owner when known
-	if (flags&FlagPet) != 0 || (flags&FlagGuardian) != 0 {
-		owner := a.OwnerGUID
-		if owner == "" {
-			owner = p.petOwner[guid]
+	// Keep pet/guardian stats on the pet itself; UI rolls them into the
+	// owning player. Owner mapping comes from SPELL_SUMMON + finalizeOwners.
+	return guid
+}
+
+// ultimatePlayerOwner walks the summon chain (pet → totem → player) and
+// returns the player GUID if one is found.
+func (p *Parser) ultimatePlayerOwner(guid string) string {
+	seen := map[string]bool{}
+	cur := guid
+	for i := 0; i < 8; i++ {
+		if seen[cur] {
+			return ""
 		}
-		if owner != "" {
-			if _, ok := p.actors[owner]; ok {
-				return owner
+		seen[cur] = true
+		owner := p.petOwner[cur]
+		if owner == "" {
+			if a := p.actors[cur]; a != nil {
+				owner = a.OwnerGUID
 			}
 		}
+		if owner == "" {
+			return ""
+		}
+		if a := p.actors[owner]; a != nil && a.IsPlayer {
+			return owner
+		}
+		cur = owner
 	}
-	return guid
+	return ""
+}
+
+// finalizeOwners rewrites OwnerGUID to the ultimate player owner when known,
+// so nested summons (e.g. elemental → totem → shaman) attach to the player.
+func (p *Parser) finalizeOwners() {
+	for _, a := range p.actors {
+		if a.IsPlayer {
+			a.OwnerGUID = ""
+			continue
+		}
+		if player := p.ultimatePlayerOwner(a.GUID); player != "" {
+			a.OwnerGUID = player
+		}
+	}
 }
 
 func (p *Parser) fightActor(guid string, ts time.Time) *ActorAgg {

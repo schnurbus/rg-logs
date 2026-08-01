@@ -65,6 +65,62 @@ func TestSplitAndAggregateSampleSnippet(t *testing.T) {
 	}
 }
 
+func TestPetDamageStaysOnPetWithPlayerOwner(t *testing.T) {
+	snippet := strings.Join([]string{
+		`8/1 08:45:16.653  SPELL_SUMMON,0x0000000000811FFF,"Lashback",0x512,0xF130004CD400035B,"Schattengeist",0x1112,34433,"Schattengeist",0x20`,
+		`8/1 08:45:17.000  SPELL_DAMAGE,0xF130004CD400035B,"Schattengeist",0x1112,0xF130006C590000BA,"Zombie",0xa48,1,"Nahkampf",0x1,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:18.000  SPELL_DAMAGE,0xF130004CD400035B,"Schattengeist",0x1112,0xF130006C590000BA,"Zombie",0xa48,1,"Nahkampf",0x1,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:19.000  SPELL_DAMAGE,0xF130004CD400035B,"Schattengeist",0x1112,0xF130006C590000BA,"Zombie",0xa48,1,"Nahkampf",0x1,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:20.000  SPELL_DAMAGE,0xF130004CD400035B,"Schattengeist",0x1112,0xF130006C590000BA,"Zombie",0xa48,1,"Nahkampf",0x1,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:21.000  SPELL_DAMAGE,0xF130004CD400035B,"Schattengeist",0x1112,0xF130006C590000BA,"Zombie",0xa48,1,"Nahkampf",0x1,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:22.000  SPELL_DAMAGE,0x0000000000811FFF,"Lashback",0x512,0xF130006C590000BA,"Zombie",0xa48,585,"Smite",0x2,100,0,2,0,0,0,nil,nil,nil`,
+		`8/1 08:45:23.000  SPELL_DAMAGE,0x0000000000811FFF,"Lashback",0x512,0xF130006C590000BA,"Zombie",0xa48,585,"Smite",0x2,100,0,2,0,0,0,nil,nil,nil`,
+		`8/1 08:45:24.000  SPELL_DAMAGE,0x0000000000811FFF,"Lashback",0x512,0xF130006C590000BA,"Zombie",0xa48,585,"Smite",0x2,100,0,2,0,0,0,nil,nil,nil`,
+		`8/1 08:45:25.000  SPELL_DAMAGE,0x0000000000811FFF,"Lashback",0x512,0xF130006C590000BA,"Zombie",0xa48,585,"Smite",0x2,100,0,2,0,0,0,nil,nil,nil`,
+		`8/1 08:45:26.000  SPELL_DAMAGE,0x0000000000811FFF,"Lashback",0x512,0xF130006C590000BA,"Zombie",0xa48,585,"Smite",0x2,100,0,2,0,0,0,nil,nil,nil`,
+		`8/1 08:45:40.000  UNIT_DIED,0x0000000000000000,nil,0x80000000,0xF130006C590000BA,"Zombie",0xa48`,
+	}, "\n")
+
+	res, err := parser.Parse(strings.NewReader(snippet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Fights) != 1 {
+		t.Fatalf("expected 1 fight, got %d", len(res.Fights))
+	}
+	f := res.Fights[0]
+
+	const (
+		playerGUID = "0x0000000000811FFF"
+		petGUID    = "0xF130004CD400035B"
+	)
+
+	var petOwner string
+	for _, a := range res.Actors {
+		if a.GUID == petGUID {
+			petOwner = a.OwnerGUID
+		}
+	}
+	if petOwner != playerGUID {
+		t.Fatalf("pet owner=%q, want %q", petOwner, playerGUID)
+	}
+
+	petAgg := f.Actors[petGUID]
+	if petAgg == nil {
+		t.Fatal("expected pet actor agg")
+	}
+	if petAgg.DamageDone != 2500 {
+		t.Fatalf("pet damage=%d, want 2500 (not remapped to owner)", petAgg.DamageDone)
+	}
+	playerAgg := f.Actors[playerGUID]
+	if playerAgg == nil {
+		t.Fatal("expected player actor agg")
+	}
+	if playerAgg.DamageDone != 500 {
+		t.Fatalf("player own damage=%d, want 500", playerAgg.DamageDone)
+	}
+}
+
 func TestFightGapSegmentation(t *testing.T) {
 	snippet := strings.Join([]string{
 		`8/1 08:45:16.653  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,

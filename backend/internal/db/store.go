@@ -56,6 +56,7 @@ type ActorStat struct {
 	Name         string    `json:"name"`
 	GUID         string    `json:"guid"`
 	IsPlayer     bool      `json:"isPlayer"`
+	OwnerGUID    *string   `json:"ownerGuid,omitempty"`
 	DamageDone   int64     `json:"damageDone"`
 	HealingDone  int64     `json:"healingDone"`
 	Overheal     int64     `json:"overheal"`
@@ -192,7 +193,7 @@ func (s *Store) GetFight(ctx context.Context, id uuid.UUID) (*Fight, error) {
 
 func (s *Store) ListActorStats(ctx context.Context, fightID uuid.UUID) ([]ActorStat, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT a.id, a.name, a.guid, a.is_player,
+		SELECT a.id, a.name, a.guid, a.is_player, a.owner_guid,
 		       s.damage_done, s.healing_done, s.overheal, s.damage_taken, s.active_time_ms,
 		       f.duration_ms
 		FROM actor_stats s
@@ -211,7 +212,7 @@ func (s *Store) ListActorStats(ctx context.Context, fightID uuid.UUID) ([]ActorS
 		var durationMs int64
 		st.FightID = fightID
 		if err := rows.Scan(
-			&st.ActorID, &st.Name, &st.GUID, &st.IsPlayer,
+			&st.ActorID, &st.Name, &st.GUID, &st.IsPlayer, &st.OwnerGUID,
 			&st.DamageDone, &st.HealingDone, &st.Overheal, &st.DamageTaken, &st.ActiveTimeMs,
 			&durationMs,
 		); err != nil {

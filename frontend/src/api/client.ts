@@ -71,11 +71,18 @@ export function normalizeParticipant(raw: unknown): Participant {
 
   const dpsRaw = pick<unknown>(o, 'dps', 'dps')
   const hpsRaw = pick<unknown>(o, 'hps', 'hps')
+  const ownerRaw = pick<unknown>(o, 'ownerGuid', 'owner_guid')
+  const ownerGuid =
+    ownerRaw != null && asString(ownerRaw) !== ''
+      ? asString(ownerRaw)
+      : undefined
 
   return {
     actorId: asString(pick(o, 'actorId', 'actor_id')),
+    guid: asString(pick(o, 'guid', 'guid')),
     name: asString(pick(o, 'name', 'name'), 'Unknown'),
     isPlayer: asBool(pick(o, 'isPlayer', 'is_player')),
+    ownerGuid,
     damageDone,
     healingDone,
     overheal: asNumber(pick(o, 'overheal', 'overheal')),

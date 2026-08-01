@@ -18,6 +18,13 @@ const TABS: { id: MetricTab; label: string }[] = [
   { id: 'taken', label: 'Damage Taken' },
 ]
 
+type MeterRow = {
+  player: Participant
+  /** Player stats with pet damage/healing/taken rolled into totals */
+  totals: Participant
+  pets: Participant[]
+}
+
 function amountFor(p: Participant, tab: MetricTab): number {
   switch (tab) {
     case 'damage':
@@ -29,18 +36,71 @@ function amountFor(p: Participant, tab: MetricTab): number {
   }
 }
 
-function rateFor(p: Participant, tab: MetricTab): number | undefined {
-  if (tab === 'damage') return p.dps
-  if (tab === 'healing') return p.hps
-  // Damage taken rate
-  const seconds = p.activeTimeMs > 0 ? p.activeTimeMs / 1000 : 0
-  return seconds > 0 ? p.damageTaken / seconds : undefined
+function rateFor(
+  p: Participant,
+  tab: MetricTab,
+  durationMs: number,
+): number | undefined {
+  const seconds = durationMs > 0 ? durationMs / 1000 : 0
+  if (seconds <= 0) return undefined
+  if (tab === 'damage') return p.damageDone / seconds
+  if (tab === 'healing') {
+    const effective = Math.max(0, p.healingDone - p.overheal)
+    return effective / seconds
+  }
+  return p.damageTaken / seconds
 }
 
 function rateLabel(tab: MetricTab): string {
   if (tab === 'healing') return 'HPS'
   if (tab === 'taken') return 'DTPS'
   return 'DPS'
+}
+
+/** Group player pets under their owners; roll pet damage into player totals. NPCs omitted. */
+function buildMeterRows(
+  participants: Participant[],
+  durationMs: number,
+): MeterRow[] {
+  const players = participants.filter((p) => p.isPlayer)
+  const byGuid = new Map(players.map((p) => [p.guid, p]))
+
+  const petsByOwner = new Map<string, Participant[]>()
+  for (const p of participants) {
+    if (p.isPlayer || !p.ownerGuid) continue
+    if (!byGuid.has(p.ownerGuid)) continue
+    const list = petsByOwner.get(p.ownerGuid) ?? []
+    list.push(p)
+    petsByOwner.set(p.ownerGuid, list)
+  }
+
+  const secs = durationMs > 0 ? durationMs / 1000 : 0
+
+  return players.map((player) => {
+    const pets = [...(petsByOwner.get(player.guid) ?? [])].sort(
+      (a, b) => b.damageDone - a.damageDone,
+    )
+    const damageDone =
+      player.damageDone + pets.reduce((s, pet) => s + pet.damageDone, 0)
+    const healingDone =
+      player.healingDone + pets.reduce((s, pet) => s + pet.healingDone, 0)
+    const overheal =
+      player.overheal + pets.reduce((s, pet) => s + pet.overheal, 0)
+    const damageTaken =
+      player.damageTaken + pets.reduce((s, pet) => s + pet.damageTaken, 0)
+
+    const totals: Participant = {
+      ...player,
+      damageDone,
+      healingDone,
+      overheal,
+      damageTaken,
+      dps: secs > 0 ? damageDone / secs : undefined,
+      hps: secs > 0 ? Math.max(0, healingDone - overheal) / secs : undefined,
+    }
+
+    return { player, totals, pets }
+  })
 }
 
 export function FightDetailPage() {
@@ -80,16 +140,16 @@ export function FightDetailPage() {
     setSpellsError(null)
   }, [tab])
 
-  const sorted = useMemo(() => {
+  const rows = useMemo(() => {
     if (!fight) return []
-    return [...fight.participants].sort(
-      (a, b) => amountFor(b, tab) - amountFor(a, tab),
-    )
+    return buildMeterRows(fight.participants, fight.durationMs)
+      .filter((row) => amountFor(row.totals, tab) > 0)
+      .sort((a, b) => amountFor(b.totals, tab) - amountFor(a.totals, tab))
   }, [fight, tab])
 
   const total = useMemo(
-    () => sorted.reduce((sum, p) => sum + amountFor(p, tab), 0),
-    [sorted, tab],
+    () => rows.reduce((sum, row) => sum + amountFor(row.totals, tab), 0),
+    [rows, tab],
   )
 
   const openSpells = async (p: Participant) => {
@@ -198,15 +258,17 @@ export function FightDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {sorted.map((p, i) => {
-              const amount = amountFor(p, tab)
-              const rate = rateFor(p, tab)
+            {rows.flatMap((row, i) => {
+              const amount = amountFor(row.totals, tab)
+              const rate = rateFor(row.totals, tab, fight.durationMs)
               const pct = total > 0 ? amount / total : 0
-              const active = selected?.actorId === p.actorId
-              return (
+              const active = selected?.actorId === row.player.actorId
+              const visiblePets = row.pets.filter((pet) => amountFor(pet, tab) > 0)
+
+              const playerRow = (
                 <tr
-                  key={p.actorId || `${p.name}-${i}`}
-                  onClick={() => void openSpells(p)}
+                  key={row.player.actorId || `${row.player.name}-${i}`}
+                  onClick={() => void openSpells(row.player)}
                   className={[
                     'border-t border-border-subtle cursor-pointer',
                     active
@@ -216,10 +278,7 @@ export function FightDetailPage() {
                 >
                   <td className="px-3 py-2 text-text-muted">{i + 1}</td>
                   <td className="px-3 py-2">
-                    <span className="font-medium text-text">{p.name}</span>
-                    {!p.isPlayer ? (
-                      <span className="ml-2 text-xs text-text-muted">NPC</span>
-                    ) : null}
+                    <span className="font-medium text-text">{row.player.name}</span>
                   </td>
                   <td className="px-3 py-2 text-right font-mono">
                     {formatNumber(amount)}
@@ -232,8 +291,44 @@ export function FightDetailPage() {
                   </td>
                 </tr>
               )
+
+              const petRows = visiblePets.map((pet) => {
+                const petAmount = amountFor(pet, tab)
+                const petRate = rateFor(pet, tab, fight.durationMs)
+                const petPct = total > 0 ? petAmount / total : 0
+                const petActive = selected?.actorId === pet.actorId
+                return (
+                  <tr
+                    key={pet.actorId || `${pet.name}-pet`}
+                    onClick={() => void openSpells(pet)}
+                    className={[
+                      'border-t border-border-subtle cursor-pointer',
+                      petActive
+                        ? 'bg-surface-overlay'
+                        : 'hover:bg-surface-overlay/50',
+                    ].join(' ')}
+                  >
+                    <td className="px-3 py-2 text-text-muted" />
+                    <td className="px-3 py-2 pl-8">
+                      <span className="text-text-muted">{pet.name}</span>
+                      <span className="ml-2 text-xs text-text-muted">Pet</span>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-text-muted">
+                      {formatNumber(petAmount)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-text-muted">
+                      {formatRate(petRate)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-text-muted">
+                      {formatPercent(petPct)}
+                    </td>
+                  </tr>
+                )
+              })
+
+              return [playerRow, ...petRows]
             })}
-            {sorted.length === 0 ? (
+            {rows.length === 0 ? (
               <tr>
                 <td
                   colSpan={5}
@@ -253,6 +348,11 @@ export function FightDetailPage() {
             <h2 className="text-sm font-semibold">
               Spell-Breakdown:{' '}
               <span className="text-accent">{selected.name}</span>
+              {selected.ownerGuid ? (
+                <span className="ml-2 text-xs font-normal text-text-muted">
+                  Pet
+                </span>
+              ) : null}
             </h2>
             <button
               type="button"

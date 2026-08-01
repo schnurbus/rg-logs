@@ -38,8 +38,11 @@ export interface Upload {
 
 export interface Participant {
   actorId: string
+  guid: string
   name: string
   isPlayer: boolean
+  /** Present for pets/guardians/summons owned by a player */
+  ownerGuid?: string
   damageDone: number
   healingDone: number
   overheal: number
