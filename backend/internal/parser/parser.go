@@ -25,6 +25,15 @@ const (
 	SpellMeleeName = "Nahkampf"
 )
 
+// Spells that prove a player↔pet ownership link when SUMMON is missing
+// (pet already active when combat logging started).
+var petOwnerLinkSpells = map[int]struct{}{
+	25228: {}, // Soul Link
+	35696: {}, // Demonic Knowledge
+	35706: {}, // Master Demonologist
+	54181: {}, // Fel Synergy
+}
+
 type Metric string
 
 const (
@@ -197,11 +206,8 @@ func (p *Parser) handleLine(line string) error {
 	}
 
 	// Aura / interrupt / dispel: record only inside an open fight (do not start fights).
+	// Pet-owner link auras are still processed out of combat.
 	if isSupportEvent(event) {
-		if p.cur == nil {
-			return nil
-		}
-		p.cur.EndTs = ts
 		switch event {
 		case "SPELL_AURA_APPLIED", "SPELL_AURA_APPLIED_DOSE":
 			p.handleAura(ts, fields, EventAuraApplied)
@@ -210,8 +216,16 @@ func (p *Parser) handleLine(line string) error {
 		case "SPELL_AURA_REFRESH":
 			p.handleAura(ts, fields, EventAuraRefresh)
 		case "SPELL_INTERRUPT":
+			if p.cur == nil {
+				return nil
+			}
+			p.cur.EndTs = ts
 			p.handleInterrupt(ts, fields)
 		case "SPELL_DISPEL", "SPELL_STOLEN", "SPELL_DISPEL_FAILED":
+			if p.cur == nil {
+				return nil
+			}
+			p.cur.EndTs = ts
 			p.handleDispel(ts, fields)
 		}
 		return nil
@@ -364,6 +378,42 @@ func (p *Parser) ensureActor(guid, name string, flags int64) *ActorInfo {
 		}
 	}
 	return a
+}
+
+func isPlayerControlledPet(flags int64) bool {
+	return (flags&FlagPet) != 0 || (flags&FlagGuardian) != 0
+}
+
+// notePetOwnerLink records owner when a known pet-bond spell fires between
+// a player and a pet/guardian (covers pets summoned before the log starts).
+func (p *Parser) notePetOwnerLink(spellID int, srcGUID string, srcFlags int64, dstGUID string, dstFlags int64) {
+	if _, ok := petOwnerLinkSpells[spellID]; !ok {
+		return
+	}
+	srcPet := isPlayerControlledPet(srcFlags)
+	dstPet := isPlayerControlledPet(dstFlags)
+	srcPlayer := (srcFlags & FlagPlayer) != 0
+	dstPlayer := (dstFlags & FlagPlayer) != 0
+
+	var petGUID, ownerGUID string
+	switch {
+	case srcPet && dstPlayer:
+		petGUID, ownerGUID = srcGUID, dstGUID
+	case dstPet && srcPlayer:
+		petGUID, ownerGUID = dstGUID, srcGUID
+	default:
+		return
+	}
+	if petGUID == "" || ownerGUID == "" {
+		return
+	}
+	if existing, ok := p.petOwner[petGUID]; ok && existing != "" {
+		return
+	}
+	p.petOwner[petGUID] = ownerGUID
+	if a := p.actors[petGUID]; a != nil && a.OwnerGUID == "" {
+		a.OwnerGUID = ownerGUID
+	}
 }
 
 func (p *Parser) resolveSource(guid, name string, flags int64) string {
@@ -803,6 +853,7 @@ func (p *Parser) handleHeal(ts time.Time, fields []string, periodic bool) {
 
 	src := p.resolveSource(srcGUID, srcName, srcFlags)
 	p.ensureActor(dstGUID, dstName, dstFlags)
+	p.notePetOwnerLink(spellID, srcGUID, srcFlags, dstGUID, dstFlags)
 
 	if agg := p.fightActor(src, ts); agg != nil {
 		agg.HealingDone += amount
@@ -852,7 +903,7 @@ func (p *Parser) handleDeath(ts time.Time, fields []string) {
 }
 
 func (p *Parser) handleAura(ts time.Time, fields []string, eventType int16) {
-	if len(fields) < 10 || p.cur == nil {
+	if len(fields) < 10 {
 		return
 	}
 	srcGUID, srcName, srcFlags := fields[0], fields[1], parseFlags(fields[2])
@@ -864,7 +915,13 @@ func (p *Parser) handleAura(ts time.Time, fields []string, eventType int16) {
 
 	p.ensureActor(srcGUID, srcName, srcFlags)
 	p.ensureActor(dstGUID, dstName, dstFlags)
+	p.notePetOwnerLink(spellID, srcGUID, srcFlags, dstGUID, dstFlags)
 	p.noteAbility(spellID, spellName, school)
+
+	if p.cur == nil {
+		return
+	}
+	p.cur.EndTs = ts
 
 	flags := 0
 	switch auraType {

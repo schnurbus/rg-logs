@@ -101,6 +101,7 @@ export function normalizeParticipant(raw: unknown): Participant {
     guid: asString(pick(o, 'guid', 'guid')),
     name: asString(pick(o, 'name', 'name'), 'Unknown'),
     isPlayer: asBool(pick(o, 'isPlayer', 'is_player')),
+    flags: asNumber(pick(o, 'flags', 'flags')),
     ownerGuid,
     class: asPlayerClass(pick(o, 'class', 'class')),
     spec: asPlayerSpec(pick(o, 'spec', 'spec')),

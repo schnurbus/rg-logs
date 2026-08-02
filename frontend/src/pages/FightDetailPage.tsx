@@ -126,9 +126,11 @@ function ownedByPlayer(
   )
 }
 
-/** Enemy = non-player without a player owner (raid pets stay with players). */
+/** Enemy = non-player, not a pet/guardian, without a player owner. */
 function isEnemy(p: Participant, participants: Participant[]): boolean {
-  return !p.isPlayer && !ownedByPlayer(p, participants)
+  const flags = p.flags ?? 0
+  const isPetOrGuardian = (flags & 0x1000) !== 0 || (flags & 0x2000) !== 0
+  return !p.isPlayer && !isPetOrGuardian && !ownedByPlayer(p, participants)
 }
 
 /** Roll pet damage into player totals. Pets are not listed separately. */

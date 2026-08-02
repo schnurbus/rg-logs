@@ -53,6 +53,8 @@ export interface Participant {
   guid: string
   name: string
   isPlayer: boolean
+  /** CLEU unit flags (pet=0x1000, guardian=0x2000). */
+  flags?: number
   /** Present for pets/guardians/summons owned by a player */
   ownerGuid?: string
   /** Inferred from signature spell IDs (WotLK). */

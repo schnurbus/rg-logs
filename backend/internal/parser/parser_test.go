@@ -124,6 +124,41 @@ func TestPetDamageStaysOnPetWithPlayerOwner(t *testing.T) {
 	}
 }
 
+func TestPetOwnerFromSoulLinkWithoutSummon(t *testing.T) {
+	snippet := strings.Join([]string{
+		`8/1 08:45:10.000  SPELL_AURA_APPLIED,0xF1407416A8000408,"Jhuughun",0x1114,0x0000000000817847,"Diedot",0x514,25228,"Seelenverbindung",0x20,BUFF`,
+		`8/1 08:45:16.653  SWING_DAMAGE,0xF1407416A8000408,"Jhuughun",0x1114,0xF130006C590000BA,"Zombie",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:17.000  SWING_DAMAGE,0xF1407416A8000408,"Jhuughun",0x1114,0xF130006C590000BA,"Zombie",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:18.000  SWING_DAMAGE,0xF1407416A8000408,"Jhuughun",0x1114,0xF130006C590000BA,"Zombie",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:19.000  SWING_DAMAGE,0xF1407416A8000408,"Jhuughun",0x1114,0xF130006C590000BA,"Zombie",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:20.000  SWING_DAMAGE,0xF1407416A8000408,"Jhuughun",0x1114,0xF130006C590000BA,"Zombie",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:21.000  SWING_DAMAGE,0xF1407416A8000408,"Jhuughun",0x1114,0xF130006C590000BA,"Zombie",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:22.000  SWING_DAMAGE,0xF1407416A8000408,"Jhuughun",0x1114,0xF130006C590000BA,"Zombie",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:23.000  SWING_DAMAGE,0xF1407416A8000408,"Jhuughun",0x1114,0xF130006C590000BA,"Zombie",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:24.000  SWING_DAMAGE,0xF1407416A8000408,"Jhuughun",0x1114,0xF130006C590000BA,"Zombie",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:25.000  SWING_DAMAGE,0xF1407416A8000408,"Jhuughun",0x1114,0xF130006C590000BA,"Zombie",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:40.000  UNIT_DIED,0x0000000000000000,nil,0x80000000,0xF130006C590000BA,"Zombie",0xa48`,
+	}, "\n")
+
+	res, err := parser.Parse(strings.NewReader(snippet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		petGUID    = "0xF1407416A8000408"
+		playerGUID = "0x0000000000817847"
+	)
+	var owner string
+	for _, a := range res.Actors {
+		if a.GUID == petGUID {
+			owner = a.OwnerGUID
+		}
+	}
+	if owner != playerGUID {
+		t.Fatalf("pet owner=%q, want %q (from Soul Link)", owner, playerGUID)
+	}
+}
+
 func TestFightGapSegmentation(t *testing.T) {
 	snippet := strings.Join([]string{
 		`8/1 08:45:16.653  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,

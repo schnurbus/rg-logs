@@ -41,9 +41,11 @@ func ParseTimelineSide(s string) TimelineSide {
 	}
 }
 
-// Enemy actor: not a player and not owned by a player (raid pets excluded).
+// Enemy actor: not a player, not a player-controlled pet/guardian, and not owned by a player.
 const sqlIsEnemyActor = `
 	%[1]s.is_player = FALSE
+	AND (%[1]s.flags & 4096) = 0
+	AND (%[1]s.flags & 8192) = 0
 	AND (
 		%[1]s.owner_guid IS NULL
 		OR NOT EXISTS (
