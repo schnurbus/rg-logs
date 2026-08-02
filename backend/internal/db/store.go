@@ -70,6 +70,7 @@ type Actor struct {
 	IsPlayer  bool      `json:"isPlayer"`
 	OwnerGUID *string   `json:"ownerGuid"`
 	Class     *string   `json:"class,omitempty"`
+	Spec      *string   `json:"spec,omitempty"`
 	GearScore *int      `json:"gearScore,omitempty"`
 }
 
@@ -81,6 +82,7 @@ type ActorStat struct {
 	IsPlayer     bool      `json:"isPlayer"`
 	OwnerGUID    *string   `json:"ownerGuid,omitempty"`
 	Class        *string   `json:"class,omitempty"`
+	Spec         *string   `json:"spec,omitempty"`
 	GearScore    *int      `json:"gearScore,omitempty"`
 	DamageDone   int64     `json:"damageDone"`
 	HealingDone  int64     `json:"healingDone"`
@@ -357,7 +359,7 @@ func (s *Store) GetFight(ctx context.Context, id uuid.UUID) (*Fight, error) {
 
 func (s *Store) ListActorStats(ctx context.Context, fightID uuid.UUID) ([]ActorStat, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT a.id, a.name, a.guid, a.is_player, a.owner_guid, a.class, a.gear_score,
+		SELECT a.id, a.name, a.guid, a.is_player, a.owner_guid, a.class, a.spec, a.gear_score,
 		       s.damage_done, s.healing_done, s.overheal, s.damage_taken, s.active_time_ms,
 		       f.duration_ms
 		FROM actor_stats s
@@ -376,7 +378,7 @@ func (s *Store) ListActorStats(ctx context.Context, fightID uuid.UUID) ([]ActorS
 		var durationMs int64
 		st.FightID = fightID
 		if err := rows.Scan(
-			&st.ActorID, &st.Name, &st.GUID, &st.IsPlayer, &st.OwnerGUID, &st.Class, &st.GearScore,
+			&st.ActorID, &st.Name, &st.GUID, &st.IsPlayer, &st.OwnerGUID, &st.Class, &st.Spec, &st.GearScore,
 			&st.DamageDone, &st.HealingDone, &st.Overheal, &st.DamageTaken, &st.ActiveTimeMs,
 			&durationMs,
 		); err != nil {
@@ -400,24 +402,27 @@ func (s *Store) ListActorStats(ctx context.Context, fightID uuid.UUID) ([]ActorS
 		return nil, err
 	}
 
-	if err := s.fillMissingClasses(ctx, fightID, out); err != nil {
+	if err := s.fillMissingClassAndSpec(ctx, fightID, out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// fillMissingClasses derives class from this fight's spell_stats when actors.class is empty
-// (e.g. uploads persisted before class detection existed). Pets inherit their owner's class.
-func (s *Store) fillMissingClasses(ctx context.Context, fightID uuid.UUID, stats []ActorStat) error {
+// fillMissingClassAndSpec derives class/spec from this fight's spell_stats when empty
+// (e.g. uploads persisted before detection existed). Pets inherit their owner's class/spec.
+func (s *Store) fillMissingClassAndSpec(ctx context.Context, fightID uuid.UUID, stats []ActorStat) error {
 	needDetect := false
 	for _, st := range stats {
-		if st.IsPlayer && (st.Class == nil || *st.Class == "") {
+		if !st.IsPlayer {
+			continue
+		}
+		if st.Class == nil || *st.Class == "" || st.Spec == nil || *st.Spec == "" {
 			needDetect = true
 			break
 		}
 	}
 	if !needDetect {
-		s.propagateOwnerClass(stats)
+		s.propagateOwnerClassAndSpec(stats)
 		return nil
 	}
 
@@ -452,25 +457,40 @@ func (s *Store) fillMissingClasses(ctx context.Context, fightID uuid.UUID, stats
 
 	for i := range stats {
 		st := &stats[i]
-		if !st.IsPlayer || (st.Class != nil && *st.Class != "") {
+		if !st.IsPlayer {
 			continue
 		}
-		cls := string(wow.DetectClass(byActor[st.ActorID]))
-		if cls == "" {
-			continue
+		totals := byActor[st.ActorID]
+		if st.Class == nil || *st.Class == "" {
+			cls := string(wow.DetectClass(totals))
+			if cls != "" {
+				st.Class = &cls
+			}
 		}
-		st.Class = &cls
+		if st.Spec == nil || *st.Spec == "" {
+			sp := string(wow.DetectSpec(totals))
+			if sp != "" {
+				st.Spec = &sp
+			}
+		}
 	}
 
-	s.propagateOwnerClass(stats)
+	s.propagateOwnerClassAndSpec(stats)
 	return nil
 }
 
-func (s *Store) propagateOwnerClass(stats []ActorStat) {
-	byGUID := make(map[string]*string, len(stats))
+func (s *Store) propagateOwnerClassAndSpec(stats []ActorStat) {
+	classByGUID := make(map[string]*string, len(stats))
+	specByGUID := make(map[string]*string, len(stats))
 	for i := range stats {
-		if stats[i].IsPlayer && stats[i].Class != nil && *stats[i].Class != "" {
-			byGUID[stats[i].GUID] = stats[i].Class
+		if !stats[i].IsPlayer {
+			continue
+		}
+		if stats[i].Class != nil && *stats[i].Class != "" {
+			classByGUID[stats[i].GUID] = stats[i].Class
+		}
+		if stats[i].Spec != nil && *stats[i].Spec != "" {
+			specByGUID[stats[i].GUID] = stats[i].Spec
 		}
 	}
 	for i := range stats {
@@ -478,11 +498,15 @@ func (s *Store) propagateOwnerClass(stats []ActorStat) {
 		if st.IsPlayer || st.OwnerGUID == nil {
 			continue
 		}
-		if st.Class != nil && *st.Class != "" {
-			continue
+		if st.Class == nil || *st.Class == "" {
+			if cls, ok := classByGUID[*st.OwnerGUID]; ok {
+				st.Class = cls
+			}
 		}
-		if cls, ok := byGUID[*st.OwnerGUID]; ok {
-			st.Class = cls
+		if st.Spec == nil || *st.Spec == "" {
+			if sp, ok := specByGUID[*st.OwnerGUID]; ok {
+				st.Spec = sp
+			}
 		}
 	}
 }
@@ -621,14 +645,15 @@ func (s *Store) PersistParseResult(ctx context.Context, uploadID uuid.UUID, acto
 
 	for _, a := range actors {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO actors (id, upload_id, guid, name, flags, is_player, owner_guid, class, gear_score)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			INSERT INTO actors (id, upload_id, guid, name, flags, is_player, owner_guid, class, spec, gear_score)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 			ON CONFLICT (upload_id, guid) DO UPDATE
 			SET name=EXCLUDED.name, flags=EXCLUDED.flags, is_player=EXCLUDED.is_player,
 			    owner_guid=COALESCE(EXCLUDED.owner_guid, actors.owner_guid),
 			    class=COALESCE(EXCLUDED.class, actors.class),
+			    spec=COALESCE(EXCLUDED.spec, actors.spec),
 			    gear_score=COALESCE(EXCLUDED.gear_score, actors.gear_score)`,
-			a.ID, uploadID, a.GUID, a.Name, a.Flags, a.IsPlayer, a.OwnerGUID, a.Class, a.GearScore,
+			a.ID, uploadID, a.GUID, a.Name, a.Flags, a.IsPlayer, a.OwnerGUID, a.Class, a.Spec, a.GearScore,
 		)
 		if err != nil {
 			return fmt.Errorf("insert actor %s: %w", a.GUID, err)
@@ -702,6 +727,7 @@ type PersistedActor struct {
 	IsPlayer  bool
 	OwnerGUID *string
 	Class     *string
+	Spec      *string
 	GearScore *int
 }
 

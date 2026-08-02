@@ -7,6 +7,7 @@ import type {
   UploadStatus,
 } from '../types/api'
 import { asPlayerClass } from '../lib/classes'
+import { asPlayerSpec } from '../lib/specs'
 import { getApiAccessToken } from './token'
 
 type Raw = Record<string, unknown>
@@ -90,6 +91,7 @@ export function normalizeParticipant(raw: unknown): Participant {
     isPlayer: asBool(pick(o, 'isPlayer', 'is_player')),
     ownerGuid,
     class: asPlayerClass(pick(o, 'class', 'class')),
+    spec: asPlayerSpec(pick(o, 'spec', 'spec')),
     gearScore,
     damageDone,
     healingDone,

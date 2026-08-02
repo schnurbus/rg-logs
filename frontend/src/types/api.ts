@@ -51,6 +51,8 @@ export interface Participant {
   ownerGuid?: string
   /** Inferred from signature spell IDs (WotLK). */
   class?: string
+  /** Talent-tree specialization inferred from signature spell IDs (WotLK). */
+  spec?: string
   /** GearScoreLite from Rising Gods profile at ingest time. */
   gearScore?: number
   damageDone: number

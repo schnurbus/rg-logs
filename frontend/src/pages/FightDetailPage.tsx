@@ -3,6 +3,8 @@ import { Link, useParams } from 'react-router-dom'
 import { ApiError, getFight, getFightSpells } from '../api/client'
 import { ErrorMessage, Loading } from '../components/ErrorMessage'
 import { MeterBar } from '../components/MeterBar'
+import { RaidComposition } from '../components/RaidComposition'
+import { SpecIcon } from '../components/SpecIcon'
 import { SpellStatTooltip } from '../components/SpellStatTooltip'
 import {
   asPlayerClass,
@@ -18,13 +20,41 @@ import {
 import { risingGodsProfileURL } from '../lib/risingGods'
 import type { FightDetail, Participant, SpellStat } from '../types/api'
 
-type MetricTab = 'damage' | 'healing' | 'taken'
+type FightTab =
+  | 'summary'
+  | 'damage'
+  | 'taken'
+  | 'healing'
+  | 'threat'
+  | 'buffs'
+  | 'debuffs'
+  | 'deaths'
+  | 'interrupts'
+  | 'dispels'
 
-const TABS: { id: MetricTab; label: string }[] = [
-  { id: 'damage', label: 'Damage Done' },
-  { id: 'healing', label: 'Healing Done' },
-  { id: 'taken', label: 'Damage Taken' },
+type MeterTab = 'damage' | 'healing' | 'taken'
+
+const TABS: { id: FightTab; label: string }[] = [
+  { id: 'summary', label: 'Zusammenfassung' },
+  { id: 'damage', label: 'Verursachter Schaden' },
+  { id: 'taken', label: 'Erlittener Schaden' },
+  { id: 'healing', label: 'Heilung' },
+  { id: 'threat', label: 'Bedrohung' },
+  { id: 'buffs', label: 'Buffs' },
+  { id: 'debuffs', label: 'Debuffs' },
+  { id: 'deaths', label: 'Tode' },
+  { id: 'interrupts', label: 'Unterbrechungen' },
+  { id: 'dispels', label: 'Bannungen' },
 ]
+
+const PLACEHOLDER_TABS = new Set<FightTab>([
+  'threat',
+  'buffs',
+  'debuffs',
+  'deaths',
+  'interrupts',
+  'dispels',
+])
 
 type MeterRow = {
   player: Participant
@@ -32,7 +62,11 @@ type MeterRow = {
   totals: Participant
 }
 
-function amountFor(p: Participant, tab: MetricTab): number {
+function isMeterTab(tab: FightTab): tab is MeterTab {
+  return tab === 'damage' || tab === 'healing' || tab === 'taken'
+}
+
+function amountFor(p: Participant, tab: MeterTab): number {
   switch (tab) {
     case 'damage':
       return p.damageDone
@@ -45,7 +79,7 @@ function amountFor(p: Participant, tab: MetricTab): number {
 
 function rateFor(
   p: Participant,
-  tab: MetricTab,
+  tab: MeterTab,
   durationMs: number,
 ): number | undefined {
   const seconds = durationMs > 0 ? durationMs / 1000 : 0
@@ -58,7 +92,7 @@ function rateFor(
   return p.damageTaken / seconds
 }
 
-function rateLabel(tab: MetricTab): string {
+function rateLabel(tab: MeterTab): string {
   if (tab === 'healing') return 'HPS'
   if (tab === 'taken') return 'DTPS'
   return 'DPS'
@@ -112,11 +146,235 @@ function buildMeterRows(
   })
 }
 
+function sortedMeterRows(
+  allRows: MeterRow[],
+  metric: MeterTab,
+): MeterRow[] {
+  return allRows
+    .filter((row) => amountFor(row.totals, metric) > 0)
+    .sort(
+      (a, b) => amountFor(b.totals, metric) - amountFor(a.totals, metric),
+    )
+}
+
+type CompactMeterProps = {
+  title: string
+  metric: MeterTab
+  rows: MeterRow[]
+  durationMs: number
+}
+
+function CompactMeterTable({
+  title,
+  metric,
+  rows,
+  durationMs,
+}: CompactMeterProps) {
+  const total = rows.reduce((sum, row) => sum + amountFor(row.totals, metric), 0)
+  const maxAmount = rows.reduce(
+    (max, row) => Math.max(max, amountFor(row.totals, metric)),
+    0,
+  )
+
+  return (
+    <div className="overflow-hidden rounded border border-border">
+      <div className="border-b border-border bg-surface-overlay px-3 py-2">
+        <h3 className="text-sm font-semibold">{title}</h3>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[320px] border-collapse text-left text-sm">
+          <thead className="bg-surface-raised text-xs uppercase tracking-wide text-text-muted">
+            <tr>
+              <th className="px-3 py-2 font-medium min-w-[10rem]">Name</th>
+              <th className="px-3 py-2 font-medium text-right">%</th>
+              <th className="px-3 py-2 font-medium text-right">Amount</th>
+              <th className="px-3 py-2 font-medium text-right">
+                {rateLabel(metric)}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => {
+              const amount = amountFor(row.totals, metric)
+              const rate = rateFor(row.totals, metric, durationMs)
+              const pct = total > 0 ? amount / total : 0
+              const barRatio = maxAmount > 0 ? amount / maxAmount : 0
+              const cls = playerClassOf(row.player)
+              const profileURL = risingGodsProfileURL(row.player.name)
+
+              return (
+                <tr
+                  key={row.player.actorId || `${row.player.name}-${i}`}
+                  className="border-t border-border-subtle"
+                >
+                  <td className="px-1 py-1.5">
+                    <MeterBar ratio={barRatio} playerClass={cls}>
+                      <span className="inline-flex items-center gap-1.5">
+                        <SpecIcon
+                          spec={row.player.spec}
+                          playerClass={row.player.class}
+                          name={row.player.name}
+                        />
+                        <a
+                          href={profileURL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Rising Gods Profil"
+                          className="font-medium hover:underline"
+                          style={classTextStyle(cls)}
+                        >
+                          {row.player.name}
+                        </a>
+                      </span>
+                    </MeterBar>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-text-muted">
+                    {formatPercent(pct)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono">
+                    {formatNumber(amount)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-text-muted">
+                    {formatRate(rate)}
+                  </td>
+                </tr>
+              )
+            })}
+            {rows.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={4}
+                  className="px-3 py-6 text-center text-text-muted"
+                >
+                  Keine Daten.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+type FullMeterProps = {
+  metric: MeterTab
+  rows: MeterRow[]
+  durationMs: number
+  selected: Participant | null
+  onSelect: (p: Participant) => void
+}
+
+function FullMeterTable({
+  metric,
+  rows,
+  durationMs,
+  selected,
+  onSelect,
+}: FullMeterProps) {
+  const total = rows.reduce((sum, row) => sum + amountFor(row.totals, metric), 0)
+  const maxAmount = rows.reduce(
+    (max, row) => Math.max(max, amountFor(row.totals, metric)),
+    0,
+  )
+
+  return (
+    <div className="overflow-x-auto rounded border border-border">
+      <table className="w-full min-w-[640px] border-collapse text-left text-sm">
+        <thead className="bg-surface-raised text-xs uppercase tracking-wide text-text-muted">
+          <tr>
+            <th className="px-3 py-2 font-medium w-8">#</th>
+            <th className="px-3 py-2 font-medium min-w-[12rem]">Name</th>
+            <th className="px-3 py-2 font-medium text-right">GS</th>
+            <th className="px-3 py-2 font-medium text-right">Amount</th>
+            <th className="px-3 py-2 font-medium text-right">
+              {rateLabel(metric)}
+            </th>
+            <th className="px-3 py-2 font-medium text-right">%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => {
+            const amount = amountFor(row.totals, metric)
+            const rate = rateFor(row.totals, metric, durationMs)
+            const pct = total > 0 ? amount / total : 0
+            const barRatio = maxAmount > 0 ? amount / maxAmount : 0
+            const cls = playerClassOf(row.player)
+            const active = selected?.actorId === row.player.actorId
+            const profileURL = risingGodsProfileURL(row.player.name)
+
+            return (
+              <tr
+                key={row.player.actorId || `${row.player.name}-${i}`}
+                onClick={() => onSelect(row.player)}
+                className={[
+                  'border-t border-border-subtle cursor-pointer',
+                  active
+                    ? 'bg-surface-overlay'
+                    : 'hover:bg-surface-overlay/50',
+                ].join(' ')}
+              >
+                <td className="px-3 py-2 text-text-muted">{i + 1}</td>
+                <td className="px-1 py-1.5">
+                  <MeterBar ratio={barRatio} playerClass={cls}>
+                    <span className="inline-flex items-center gap-1.5">
+                      <SpecIcon
+                        spec={row.player.spec}
+                        playerClass={row.player.class}
+                        name={row.player.name}
+                      />
+                      <a
+                        href={profileURL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Rising Gods Profil"
+                        onClick={(e) => e.stopPropagation()}
+                        className="font-medium hover:underline"
+                        style={classTextStyle(cls)}
+                      >
+                        {row.player.name}
+                      </a>
+                    </span>
+                  </MeterBar>
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-text-muted">
+                  {row.player.gearScore != null
+                    ? formatNumber(row.player.gearScore)
+                    : '—'}
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  {formatNumber(amount)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-text-muted">
+                  {formatRate(rate)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-text-muted">
+                  {formatPercent(pct)}
+                </td>
+              </tr>
+            )
+          })}
+          {rows.length === 0 ? (
+            <tr>
+              <td
+                colSpan={6}
+                className="px-3 py-6 text-center text-text-muted"
+              >
+                Keine Teilnehmer.
+              </td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export function FightDetailPage() {
   const { fightId } = useParams<{ fightId: string }>()
   const [fight, setFight] = useState<FightDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<MetricTab>('damage')
+  const [tab, setTab] = useState<FightTab>('summary')
   const [selected, setSelected] = useState<Participant | null>(null)
   const [spells, setSpells] = useState<SpellStat[] | null>(null)
   const [spellsError, setSpellsError] = useState<string | null>(null)
@@ -149,34 +407,33 @@ export function FightDetailPage() {
     setSpellsError(null)
   }, [tab])
 
-  const rows = useMemo(() => {
+  const allRows = useMemo(() => {
     if (!fight) return []
     return buildMeterRows(fight.participants, fight.durationMs)
-      .filter((row) => amountFor(row.totals, tab) > 0)
-      .sort((a, b) => amountFor(b.totals, tab) - amountFor(a.totals, tab))
-  }, [fight, tab])
+  }, [fight])
 
-  const total = useMemo(
-    () => rows.reduce((sum, row) => sum + amountFor(row.totals, tab), 0),
-    [rows, tab],
+  const meterRows = useMemo(() => {
+    if (!isMeterTab(tab)) return []
+    return sortedMeterRows(allRows, tab)
+  }, [allRows, tab])
+
+  const damageSummaryRows = useMemo(
+    () => sortedMeterRows(allRows, 'damage'),
+    [allRows],
   )
-
-  /** Top player amount — bar widths are relative to this (WCL-style). */
-  const maxAmount = useMemo(
-    () =>
-      rows.reduce((max, row) => Math.max(max, amountFor(row.totals, tab)), 0),
-    [rows, tab],
+  const healingSummaryRows = useMemo(
+    () => sortedMeterRows(allRows, 'healing'),
+    [allRows],
   )
 
   const openSpells = async (p: Participant) => {
-    if (!fightId) return
+    if (!fightId || !isMeterTab(tab)) return
     setSelected(p)
     setSpells(null)
     setSpellsError(null)
     setSpellsLoading(true)
     try {
       const data = await getFightSpells(fightId, p.actorId)
-      // Prefer spells matching current metric; fall back to all
       const metricFilter =
         tab === 'damage'
           ? 'damage'
@@ -262,190 +519,159 @@ export function FightDetailPage() {
         ))}
       </div>
 
-      <div className="overflow-x-auto rounded border border-border">
-        <table className="w-full min-w-[640px] border-collapse text-left text-sm">
-          <thead className="bg-surface-raised text-xs uppercase tracking-wide text-text-muted">
-            <tr>
-              <th className="px-3 py-2 font-medium w-8">#</th>
-              <th className="px-3 py-2 font-medium min-w-[12rem]">Name</th>
-              <th className="px-3 py-2 font-medium text-right">GS</th>
-              <th className="px-3 py-2 font-medium text-right">Amount</th>
-              <th className="px-3 py-2 font-medium text-right">
-                {rateLabel(tab)}
-              </th>
-              <th className="px-3 py-2 font-medium text-right">%</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, i) => {
-              const amount = amountFor(row.totals, tab)
-              const rate = rateFor(row.totals, tab, fight.durationMs)
-              const pct = total > 0 ? amount / total : 0
-              const barRatio = maxAmount > 0 ? amount / maxAmount : 0
-              const cls = playerClassOf(row.player)
-              const active = selected?.actorId === row.player.actorId
-              const profileURL = risingGodsProfileURL(row.player.name)
-
-              return (
-                <tr
-                  key={row.player.actorId || `${row.player.name}-${i}`}
-                  onClick={() => void openSpells(row.player)}
-                  className={[
-                    'border-t border-border-subtle cursor-pointer',
-                    active
-                      ? 'bg-surface-overlay'
-                      : 'hover:bg-surface-overlay/50',
-                  ].join(' ')}
-                >
-                  <td className="px-3 py-2 text-text-muted">{i + 1}</td>
-                  <td className="px-1 py-1.5">
-                    <MeterBar ratio={barRatio} playerClass={cls}>
-                      <a
-                        href={profileURL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="Rising Gods Profil"
-                        onClick={(e) => e.stopPropagation()}
-                        className="font-medium hover:underline"
-                        style={classTextStyle(cls)}
-                      >
-                        {row.player.name}
-                      </a>
-                    </MeterBar>
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-text-muted">
-                    {row.player.gearScore != null
-                      ? formatNumber(row.player.gearScore)
-                      : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono">
-                    {formatNumber(amount)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-text-muted">
-                    {formatRate(rate)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-text-muted">
-                    {formatPercent(pct)}
-                  </td>
-                </tr>
-              )
-            })}
-            {rows.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={6}
-                  className="px-3 py-6 text-center text-text-muted"
-                >
-                  Keine Teilnehmer.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-
-      {selected ? (
-        <section className="rounded border border-border bg-surface-raised p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold">
-              Spell-Breakdown:{' '}
-              <span style={classTextStyle(selectedClass)}>{selected.name}</span>
-            </h2>
-            <button
-              type="button"
-              className="text-xs text-text-muted hover:text-text"
-              onClick={() => {
-                setSelected(null)
-                setSpells(null)
-                setSpellsError(null)
-              }}
-            >
-              Schließen
-            </button>
+      {tab === 'summary' ? (
+        <div className="space-y-4">
+          <RaidComposition players={fight.participants} />
+          <div className="grid gap-4 lg:grid-cols-2">
+            <CompactMeterTable
+              title="Verursachter Schaden"
+              metric="damage"
+              rows={damageSummaryRows}
+              durationMs={fight.durationMs}
+            />
+            <CompactMeterTable
+              title="Heilung"
+              metric="healing"
+              rows={healingSummaryRows}
+              durationMs={fight.durationMs}
+            />
           </div>
+        </div>
+      ) : null}
 
-          {spellsLoading ? <Loading label="Spells laden…" /> : null}
-          {spellsError ? <ErrorMessage message={spellsError} /> : null}
+      {isMeterTab(tab) ? (
+        <>
+          <FullMeterTable
+            metric={tab}
+            rows={meterRows}
+            durationMs={fight.durationMs}
+            selected={selected}
+            onSelect={(p) => void openSpells(p)}
+          />
 
-          {spells && spells.length === 0 ? (
-            <p className="text-sm text-text-muted">Keine Spell-Stats.</p>
-          ) : null}
+          {selected ? (
+            <section className="rounded border border-border bg-surface-raised p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold">
+                  Spell-Breakdown:{' '}
+                  <span style={classTextStyle(selectedClass)}>
+                    {selected.name}
+                  </span>
+                </h2>
+                <button
+                  type="button"
+                  className="text-xs text-text-muted hover:text-text"
+                  onClick={() => {
+                    setSelected(null)
+                    setSpells(null)
+                    setSpellsError(null)
+                  }}
+                >
+                  Schließen
+                </button>
+              </div>
 
-          {spells && spells.length > 0 ? (
-            <div>
-              <table className="w-full min-w-[480px] border-collapse text-left text-sm">
-                <thead className="text-xs uppercase tracking-wide text-text-muted">
-                  <tr>
-                    <th className="px-2 py-1.5 font-medium min-w-[10rem]">
-                      Spell
-                    </th>
-                    <th className="px-2 py-1.5 font-medium text-right">
-                      Total
-                    </th>
-                    <th className="px-2 py-1.5 font-medium text-right">Hits</th>
-                    <th className="px-2 py-1.5 font-medium text-right">
-                      Crits
-                    </th>
-                    <th className="px-2 py-1.5 font-medium text-right">%</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(() => {
-                    const spellTotal = spells.reduce((s, x) => s + x.total, 0)
-                    const spellMax = spells.reduce(
-                      (m, x) => Math.max(m, x.total),
-                      0,
-                    )
-                    return spells.map((s) => (
-                      <tr
-                        key={`${s.spellId}-${s.metric}-${s.spellName}`}
-                        className="border-t border-border-subtle"
-                      >
-                        <td className="px-0.5 py-1">
-                          <MeterBar
-                            ratio={spellMax > 0 ? s.total / spellMax : 0}
-                            playerClass={selectedClass}
-                            tooltip={<SpellStatTooltip spell={s} />}
-                          >
-                            <span className="text-text">{s.spellName}</span>
-                            {s.pet ? (
-                              <span className="ml-2 text-xs text-text-muted">
-                                Pet
-                              </span>
-                            ) : (
-                              <span className="ml-2 font-mono text-xs text-text-muted">
-                                {s.spellId}
-                              </span>
-                            )}
-                          </MeterBar>
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono">
-                          {formatNumber(s.total)}
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono text-text-muted">
-                          {formatNumber(s.hits)}
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono text-text-muted">
-                          {formatNumber(s.crits)}
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono text-text-muted">
-                          {formatPercent(
-                            spellTotal > 0 ? s.total / spellTotal : 0,
-                          )}
-                        </td>
+              {spellsLoading ? <Loading label="Spells laden…" /> : null}
+              {spellsError ? <ErrorMessage message={spellsError} /> : null}
+
+              {spells && spells.length === 0 ? (
+                <p className="text-sm text-text-muted">Keine Spell-Stats.</p>
+              ) : null}
+
+              {spells && spells.length > 0 ? (
+                <div>
+                  <table className="w-full min-w-[480px] border-collapse text-left text-sm">
+                    <thead className="text-xs uppercase tracking-wide text-text-muted">
+                      <tr>
+                        <th className="px-2 py-1.5 font-medium min-w-[10rem]">
+                          Spell
+                        </th>
+                        <th className="px-2 py-1.5 font-medium text-right">
+                          Total
+                        </th>
+                        <th className="px-2 py-1.5 font-medium text-right">
+                          Hits
+                        </th>
+                        <th className="px-2 py-1.5 font-medium text-right">
+                          Crits
+                        </th>
+                        <th className="px-2 py-1.5 font-medium text-right">
+                          %
+                        </th>
                       </tr>
-                    ))
-                  })()}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-        </section>
-      ) : (
-        <p className="text-xs text-text-muted">
-          Zeile anklicken für Spell-Breakdown.
-        </p>
-      )}
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const spellTotal = spells.reduce(
+                          (s, x) => s + x.total,
+                          0,
+                        )
+                        const spellMax = spells.reduce(
+                          (m, x) => Math.max(m, x.total),
+                          0,
+                        )
+                        return spells.map((s) => (
+                          <tr
+                            key={`${s.spellId}-${s.metric}-${s.spellName}`}
+                            className="border-t border-border-subtle"
+                          >
+                            <td className="px-0.5 py-1">
+                              <MeterBar
+                                ratio={
+                                  spellMax > 0 ? s.total / spellMax : 0
+                                }
+                                playerClass={selectedClass}
+                                tooltip={<SpellStatTooltip spell={s} />}
+                              >
+                                <span className="text-text">
+                                  {s.spellName}
+                                </span>
+                                {s.pet ? (
+                                  <span className="ml-2 text-xs text-text-muted">
+                                    Pet
+                                  </span>
+                                ) : (
+                                  <span className="ml-2 font-mono text-xs text-text-muted">
+                                    {s.spellId}
+                                  </span>
+                                )}
+                              </MeterBar>
+                            </td>
+                            <td className="px-2 py-1.5 text-right font-mono">
+                              {formatNumber(s.total)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right font-mono text-text-muted">
+                              {formatNumber(s.hits)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right font-mono text-text-muted">
+                              {formatNumber(s.crits)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right font-mono text-text-muted">
+                              {formatPercent(
+                                spellTotal > 0 ? s.total / spellTotal : 0,
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </section>
+          ) : (
+            <p className="text-xs text-text-muted">
+              Zeile anklicken für Spell-Breakdown.
+            </p>
+          )}
+        </>
+      ) : null}
+
+      {PLACEHOLDER_TABS.has(tab) ? (
+        <div className="rounded border border-border bg-surface-raised px-4 py-10 text-center text-sm text-text-muted">
+          Noch nicht verfügbar.
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -168,15 +168,27 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 		if !a.IsPlayer {
 			continue
 		}
-		cls := string(wow.DetectClass(spellTotalsByGUID[a.GUID]))
+		totals := spellTotalsByGUID[a.GUID]
+		cls := string(wow.DetectClass(totals))
 		if cls != "" {
 			a.Class = &cls
 		}
+		spec := string(wow.DetectSpec(totals))
+		if spec != "" {
+			a.Spec = &spec
+		}
 	}
 	classByGUID := make(map[string]*string, len(actors))
+	specByGUID := make(map[string]*string, len(actors))
 	for i := range actors {
-		if actors[i].IsPlayer && actors[i].Class != nil {
+		if !actors[i].IsPlayer {
+			continue
+		}
+		if actors[i].Class != nil {
 			classByGUID[actors[i].GUID] = actors[i].Class
+		}
+		if actors[i].Spec != nil {
+			specByGUID[actors[i].GUID] = actors[i].Spec
 		}
 	}
 	for i := range actors {
@@ -186,6 +198,9 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 		}
 		if cls, ok := classByGUID[*a.OwnerGUID]; ok {
 			a.Class = cls
+		}
+		if spec, ok := specByGUID[*a.OwnerGUID]; ok {
+			a.Spec = spec
 		}
 	}
 
