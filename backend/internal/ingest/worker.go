@@ -206,6 +206,26 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 
 	w.enrichGearScores(ctx, actors)
 
+	abilities := make([]db.PersistedAbility, 0, len(result.Abilities))
+	for _, ab := range result.Abilities {
+		abilities = append(abilities, db.PersistedAbility{
+			SpellID: ab.SpellID,
+			Name:    ab.Name,
+			School:  ab.School,
+		})
+	}
+
+	actorIDPtr := func(guid string) *uuid.UUID {
+		if guid == "" {
+			return nil
+		}
+		id, ok := guidToID[guid]
+		if !ok {
+			return nil
+		}
+		return &id
+	}
+
 	fights := make([]db.PersistedFight, 0, len(result.Fights))
 	for _, fr := range result.Fights {
 		pf := db.PersistedFight{
@@ -269,10 +289,39 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 			})
 		}
 
+		pf.Events = make([]db.PersistedCombatEvent, 0, len(fr.Events))
+		for _, ev := range fr.Events {
+			src := actorIDPtr(ev.SourceGUID)
+			tgt := actorIDPtr(ev.TargetGUID)
+			if src != nil {
+				pf.ActorIDs[*src] = struct{}{}
+			}
+			if tgt != nil {
+				pf.ActorIDs[*tgt] = struct{}{}
+			}
+			pf.Events = append(pf.Events, db.PersistedCombatEvent{
+				Ts:            ev.Ts,
+				OffsetMs:      ev.OffsetMs,
+				EventType:     ev.EventType,
+				SourceActorID: src,
+				TargetActorID: tgt,
+				SpellID:       ev.SpellID,
+				Amount:        ev.Amount,
+				Overkill:      ev.Overkill,
+				Overheal:      ev.Overheal,
+				Absorbed:      ev.Absorbed,
+				Resisted:      ev.Resisted,
+				Blocked:       ev.Blocked,
+				Flags:         ev.Flags,
+				MissType:      ev.MissType,
+				Extra:         ev.Extra,
+			})
+		}
+
 		fights = append(fights, pf)
 	}
 
-	if err := w.store.PersistParseResult(ctx, job.UploadID, actors, fights); err != nil {
+	if err := w.store.PersistParseResult(ctx, job.UploadID, actors, abilities, fights); err != nil {
 		return err
 	}
 

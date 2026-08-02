@@ -51,14 +51,14 @@ type CreateUploadParams struct {
 }
 
 type Fight struct {
-	ID                uuid.UUID `json:"id"`
-	UploadID          uuid.UUID `json:"uploadId"`
-	StartTs           time.Time `json:"startTs"`
-	EndTs             time.Time `json:"endTs"`
-	DurationMs        int64     `json:"durationMs"`
-	Title             string    `json:"title"`
-	Kill              bool      `json:"kill"`
-	ParticipantCount  int       `json:"participantCount"`
+	ID               uuid.UUID `json:"id"`
+	UploadID         uuid.UUID `json:"uploadId"`
+	StartTs          time.Time `json:"startTs"`
+	EndTs            time.Time `json:"endTs"`
+	DurationMs       int64     `json:"durationMs"`
+	Title            string    `json:"title"`
+	Kill             bool      `json:"kill"`
+	ParticipantCount int       `json:"participantCount"`
 }
 
 type Actor struct {
@@ -94,23 +94,23 @@ type ActorStat struct {
 }
 
 type SpellStat struct {
-	SpellID        int    `json:"spellId"`
-	SpellName      string `json:"spellName"`
-	School         int    `json:"school"`
-	Metric         string `json:"metric"`
-	Total          int64  `json:"total"`
-	Hits           int    `json:"hits"`
-	Crits          int    `json:"crits"`
-	Ticks          int    `json:"ticks"`
-	Misses         int    `json:"misses"`
-	Glancing       int    `json:"glancing"`
-	NormalHits     int    `json:"normalHits"`
-	NormalTotal    int64  `json:"normalTotal"`
-	NormalMin      int64  `json:"normalMin"`
-	NormalMax      int64  `json:"normalMax"`
-	CritTotal      int64  `json:"critTotal"`
-	CritMin        int64  `json:"critMin"`
-	CritMax        int64  `json:"critMax"`
+	SpellID       int    `json:"spellId"`
+	SpellName     string `json:"spellName"`
+	School        int    `json:"school"`
+	Metric        string `json:"metric"`
+	Total         int64  `json:"total"`
+	Hits          int    `json:"hits"`
+	Crits         int    `json:"crits"`
+	Ticks         int    `json:"ticks"`
+	Misses        int    `json:"misses"`
+	Glancing      int    `json:"glancing"`
+	NormalHits    int    `json:"normalHits"`
+	NormalTotal   int64  `json:"normalTotal"`
+	NormalMin     int64  `json:"normalMin"`
+	NormalMax     int64  `json:"normalMax"`
+	CritTotal     int64  `json:"critTotal"`
+	CritMin       int64  `json:"critMin"`
+	CritMax       int64  `json:"critMax"`
 	GlancingTotal int64  `json:"glancingTotal"`
 	GlancingMin   int64  `json:"glancingMin"`
 	GlancingMax   int64  `json:"glancingMax"`
@@ -635,8 +635,9 @@ func (s *Store) listPetSpellAggregates(ctx context.Context, fightID, actorID uui
 	return out, rows.Err()
 }
 
-// PersistParseResult writes actors, fights and stats for an upload in one transaction.
-func (s *Store) PersistParseResult(ctx context.Context, uploadID uuid.UUID, actors []PersistedActor, fights []PersistedFight) error {
+// PersistParseResult writes actors, abilities, fights, aggregates and combat events
+// for an upload in one transaction.
+func (s *Store) PersistParseResult(ctx context.Context, uploadID uuid.UUID, actors []PersistedActor, abilities []PersistedAbility, fights []PersistedFight) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -657,6 +658,19 @@ func (s *Store) PersistParseResult(ctx context.Context, uploadID uuid.UUID, acto
 		)
 		if err != nil {
 			return fmt.Errorf("insert actor %s: %w", a.GUID, err)
+		}
+	}
+
+	for _, ab := range abilities {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO abilities (upload_id, spell_id, name, school)
+			VALUES ($1,$2,$3,$4)
+			ON CONFLICT (upload_id, spell_id) DO UPDATE
+			SET name=EXCLUDED.name, school=EXCLUDED.school`,
+			uploadID, ab.SpellID, ab.Name, ab.School,
+		)
+		if err != nil {
+			return fmt.Errorf("insert ability %d: %w", ab.SpellID, err)
 		}
 	}
 
@@ -714,6 +728,31 @@ func (s *Store) PersistParseResult(ctx context.Context, uploadID uuid.UUID, acto
 				return fmt.Errorf("insert spell_stats: %w", err)
 			}
 		}
+
+		if len(f.Events) > 0 {
+			_, err := tx.CopyFrom(
+				ctx,
+				pgx.Identifier{"combat_events"},
+				[]string{
+					"fight_id", "ts", "offset_ms", "event_type",
+					"source_actor_id", "target_actor_id", "spell_id",
+					"amount", "overkill", "overheal", "absorbed", "resisted", "blocked",
+					"flags", "miss_type", "extra",
+				},
+				pgx.CopyFromSlice(len(f.Events), func(i int) ([]any, error) {
+					ev := f.Events[i]
+					return []any{
+						f.ID, ev.Ts, ev.OffsetMs, ev.EventType,
+						ev.SourceActorID, ev.TargetActorID, ev.SpellID,
+						ev.Amount, ev.Overkill, ev.Overheal, ev.Absorbed, ev.Resisted, ev.Blocked,
+						ev.Flags, ev.MissType, ev.Extra,
+					}, nil
+				}),
+			)
+			if err != nil {
+				return fmt.Errorf("copy combat_events: %w", err)
+			}
+		}
 	}
 
 	return tx.Commit(ctx)
@@ -729,6 +768,12 @@ type PersistedActor struct {
 	Class     *string
 	Spec      *string
 	GearScore *int
+}
+
+type PersistedAbility struct {
+	SpellID int
+	Name    string
+	School  int
 }
 
 type PersistedFightStat struct {
@@ -762,6 +807,24 @@ type PersistedSpellStat struct {
 	GlancingTotal int64
 	GlancingMin   int64
 	GlancingMax   int64
+}
+
+type PersistedCombatEvent struct {
+	Ts            time.Time
+	OffsetMs      int
+	EventType     int16
+	SourceActorID *uuid.UUID
+	TargetActorID *uuid.UUID
+	SpellID       int
+	Amount        int
+	Overkill      int
+	Overheal      int
+	Absorbed      int
+	Resisted      int
+	Blocked       int
+	Flags         int
+	MissType      *int16
+	Extra         int
 }
 
 func overallMinMax(sp PersistedSpellStat) (min, max int64) {
@@ -799,6 +862,7 @@ type PersistedFight struct {
 	ActorIDs         map[uuid.UUID]struct{}
 	Stats            []PersistedFightStat
 	Spells           []PersistedSpellStat
+	Events           []PersistedCombatEvent
 }
 
 func IsNoRows(err error) bool {

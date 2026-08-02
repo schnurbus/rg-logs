@@ -12,15 +12,15 @@ import (
 )
 
 const (
-	FightGap        = 45 * time.Second
-	MinFightDur     = 5 * time.Second
-	MinFightEvents  = 10
-	FlagPlayer      = 0x400
-	FlagNPC         = 0x800
-	FlagPet         = 0x1000
-	FlagGuardian    = 0x2000
-	SpellMeleeID    = 1
-	SpellMeleeName  = "Nahkampf"
+	FightGap       = 45 * time.Second
+	MinFightDur    = 5 * time.Second
+	MinFightEvents = 10
+	FlagPlayer     = 0x400
+	FlagNPC        = 0x800
+	FlagPet        = 0x1000
+	FlagGuardian   = 0x2000
+	SpellMeleeID   = 1
+	SpellMeleeName = "Nahkampf"
 )
 
 type Metric string
@@ -80,14 +80,14 @@ type SpellAgg struct {
 }
 
 type ActorAgg struct {
-	GUID         string
-	DamageDone   int64
-	HealingDone  int64
-	Overheal     int64
-	DamageTaken  int64
-	FirstEvent   time.Time
-	LastEvent    time.Time
-	Seen         bool
+	GUID        string
+	DamageDone  int64
+	HealingDone int64
+	Overheal    int64
+	DamageTaken int64
+	FirstEvent  time.Time
+	LastEvent   time.Time
+	Seen        bool
 }
 
 type FightResult struct {
@@ -100,6 +100,7 @@ type FightResult struct {
 	ParticipantCount int
 	Actors           map[string]*ActorAgg
 	Spells           map[spellKey]*SpellAgg
+	Events           []CombatEvent
 	EnemyDamageTaken map[string]int64 // enemy name -> damage taken (for title)
 	EnemyDied        map[string]bool
 	EventCount       int
@@ -112,12 +113,14 @@ type spellKey struct {
 }
 
 type ParseResult struct {
-	Actors []*ActorInfo
-	Fights []*FightResult
+	Actors    []*ActorInfo
+	Abilities []*AbilityInfo
+	Fights    []*FightResult
 }
 
 type Parser struct {
 	actors     map[string]*ActorInfo // guid -> actor
+	abilities  map[int]*AbilityInfo  // spell_id -> ability
 	petOwner   map[string]string     // pet guid -> owner guid
 	year       int
 	cur        *FightResult
@@ -128,9 +131,10 @@ type Parser struct {
 
 func New() *Parser {
 	return &Parser{
-		actors:   make(map[string]*ActorInfo),
-		petOwner: make(map[string]string),
-		year:     time.Now().Year(),
+		actors:    make(map[string]*ActorInfo),
+		abilities: make(map[int]*AbilityInfo),
+		petOwner:  make(map[string]string),
+		year:      time.Now().Year(),
 	}
 }
 
@@ -148,7 +152,11 @@ func (p *Parser) Result() *ParseResult {
 	for _, a := range p.actors {
 		actors = append(actors, a)
 	}
-	return &ParseResult{Actors: actors, Fights: p.fights}
+	abilities := make([]*AbilityInfo, 0, len(p.abilities))
+	for _, a := range p.abilities {
+		abilities = append(abilities, a)
+	}
+	return &ParseResult{Actors: actors, Abilities: abilities, Fights: p.fights}
 }
 
 func (p *Parser) Parse(r io.Reader) error {
@@ -182,7 +190,28 @@ func (p *Parser) handleLine(line string) error {
 
 	switch event {
 	case "SPELL_SUMMON":
-		p.handleSummon(fields)
+		p.handleSummon(ts, fields)
+		return nil
+	}
+
+	// Aura / interrupt / dispel: record only inside an open fight (do not start fights).
+	if isSupportEvent(event) {
+		if p.cur == nil {
+			return nil
+		}
+		p.cur.EndTs = ts
+		switch event {
+		case "SPELL_AURA_APPLIED", "SPELL_AURA_APPLIED_DOSE":
+			p.handleAura(ts, fields, EventAuraApplied)
+		case "SPELL_AURA_REMOVED", "SPELL_AURA_REMOVED_DOSE":
+			p.handleAura(ts, fields, EventAuraRemoved)
+		case "SPELL_AURA_REFRESH":
+			p.handleAura(ts, fields, EventAuraRefresh)
+		case "SPELL_INTERRUPT":
+			p.handleInterrupt(ts, fields)
+		case "SPELL_DISPEL", "SPELL_STOLEN", "SPELL_DISPEL_FAILED":
+			p.handleDispel(ts, fields)
+		}
 		return nil
 	}
 
@@ -220,7 +249,7 @@ func (p *Parser) handleLine(line string) error {
 	case "SPELL_PERIODIC_HEAL":
 		p.handleHeal(ts, fields, true)
 	case "UNIT_DIED", "PARTY_KILL":
-		p.handleDeath(fields)
+		p.handleDeath(ts, fields)
 	}
 	return nil
 }
@@ -232,6 +261,7 @@ func newFight(start time.Time) *FightResult {
 		EndTs:            start,
 		Actors:           make(map[string]*ActorAgg),
 		Spells:           make(map[spellKey]*SpellAgg),
+		Events:           make([]CombatEvent, 0, 256),
 		EnemyDamageTaken: make(map[string]int64),
 		EnemyDied:        make(map[string]bool),
 	}
@@ -387,6 +417,7 @@ func (p *Parser) ensureSpell(actorGUID string, spellID int, spellName string, sc
 	if p.cur == nil || actorGUID == "" {
 		return nil
 	}
+	p.noteAbility(spellID, spellName, school)
 	key := spellKey{ActorGUID: actorGUID, SpellID: spellID, Metric: metric}
 	sp, ok := p.cur.Spells[key]
 	if !ok {
@@ -400,6 +431,40 @@ func (p *Parser) ensureSpell(actorGUID string, spellID int, spellName string, sc
 		p.cur.Spells[key] = sp
 	}
 	return sp
+}
+
+func (p *Parser) noteAbility(spellID int, spellName string, school int) {
+	if spellID <= 0 {
+		return
+	}
+	if a, ok := p.abilities[spellID]; ok {
+		if spellName != "" && a.Name == "" {
+			a.Name = spellName
+		}
+		if school != 0 && a.School == 0 {
+			a.School = school
+		}
+		return
+	}
+	name := spellName
+	if name == "" {
+		name = strconv.Itoa(spellID)
+	}
+	p.abilities[spellID] = &AbilityInfo{SpellID: spellID, Name: name, School: school}
+}
+
+func (p *Parser) appendEvent(ev CombatEvent) {
+	if p.cur == nil {
+		return
+	}
+	if ev.Ts.IsZero() {
+		ev.Ts = p.cur.EndTs
+	}
+	ev.OffsetMs = int(ev.Ts.Sub(p.cur.StartTs).Milliseconds())
+	if ev.OffsetMs < 0 {
+		ev.OffsetMs = 0
+	}
+	p.cur.Events = append(p.cur.Events, ev)
 }
 
 func (p *Parser) addSpell(actorGUID string, spellID int, spellName string, school int, metric Metric, amount int64, crit bool, tick bool, glancing bool) {
@@ -435,7 +500,7 @@ func (p *Parser) addSpellMiss(actorGUID string, spellID int, spellName string, s
 	sp.Misses++
 }
 
-func (p *Parser) handleSummon(fields []string) {
+func (p *Parser) handleSummon(ts time.Time, fields []string) {
 	if len(fields) < 6 {
 		return
 	}
@@ -449,6 +514,22 @@ func (p *Parser) handleSummon(fields []string) {
 			a.OwnerGUID = srcGUID
 		}
 	}
+	if p.cur == nil {
+		return
+	}
+	spellID := 0
+	if len(fields) >= 9 {
+		spellID = int(parseInt64(fields[6]))
+		p.noteAbility(spellID, unquote(fields[7]), int(parseInt64(fields[8])))
+	}
+	p.cur.EndTs = ts
+	p.appendEvent(CombatEvent{
+		Ts:         ts,
+		EventType:  EventSummon,
+		SourceGUID: srcGUID,
+		TargetGUID: dstGUID,
+		SpellID:    spellID,
+	})
 }
 
 func (p *Parser) handleSwingDamage(ts time.Time, fields []string, _ bool) {
@@ -459,11 +540,29 @@ func (p *Parser) handleSwingDamage(ts time.Time, fields []string, _ bool) {
 	dstGUID, dstName, dstFlags := fields[3], fields[4], parseFlags(fields[5])
 	amount := parseInt64(fields[6])
 	// amount,overkill,school,resisted,blocked,absorbed,crit,glancing,crushing
+	overkill := int64(0)
+	resisted := int64(0)
+	blocked := int64(0)
+	absorbed := int64(0)
+	if len(fields) > 7 {
+		overkill = parseInt64(fields[7])
+	}
+	if len(fields) > 9 {
+		resisted = parseInt64(fields[9])
+	}
+	if len(fields) > 10 {
+		blocked = parseInt64(fields[10])
+	}
+	if len(fields) > 11 {
+		absorbed = parseInt64(fields[11])
+	}
 	crit := len(fields) > 12 && isTruthy(fields[12])
 	glancing := len(fields) > 13 && isTruthy(fields[13])
+	crushing := len(fields) > 14 && isTruthy(fields[14])
 
 	src := p.resolveSource(srcGUID, srcName, srcFlags)
 	p.ensureActor(dstGUID, dstName, dstFlags)
+	p.noteAbility(SpellMeleeID, SpellMeleeName, 1)
 
 	if agg := p.fightActor(src, ts); agg != nil {
 		agg.DamageDone += amount
@@ -478,6 +577,30 @@ func (p *Parser) handleSwingDamage(ts time.Time, fields []string, _ bool) {
 	if (dstFlags&FlagPlayer) == 0 && (dstFlags&FlagNPC) != 0 {
 		p.cur.EnemyDamageTaken[unquote(dstName)] += amount
 	}
+
+	flags := 0
+	if crit {
+		flags |= EventFlagCrit
+	}
+	if glancing {
+		flags |= EventFlagGlancing
+	}
+	if crushing {
+		flags |= EventFlagCrushing
+	}
+	p.appendEvent(CombatEvent{
+		Ts:         ts,
+		EventType:  EventDamage,
+		SourceGUID: src,
+		TargetGUID: dstGUID,
+		SpellID:    SpellMeleeID,
+		Amount:     int(amount),
+		Overkill:   int(overkill),
+		Absorbed:   int(absorbed),
+		Resisted:   int(resisted),
+		Blocked:    int(blocked),
+		Flags:      flags,
+	})
 }
 
 func (p *Parser) handleSpellDamage(ts time.Time, fields []string, periodic bool) {
@@ -492,8 +615,25 @@ func (p *Parser) handleSpellDamage(ts time.Time, fields []string, periodic bool)
 	school := int(parseInt64(fields[8]))
 	amount := parseInt64(fields[9])
 	// amount,overkill,school,resisted,blocked,absorbed,crit,glancing,crushing
+	overkill := int64(0)
+	resisted := int64(0)
+	blocked := int64(0)
+	absorbed := int64(0)
+	if len(fields) > 10 {
+		overkill = parseInt64(fields[10])
+	}
+	if len(fields) > 12 {
+		resisted = parseInt64(fields[12])
+	}
+	if len(fields) > 13 {
+		blocked = parseInt64(fields[13])
+	}
+	if len(fields) > 14 {
+		absorbed = parseInt64(fields[14])
+	}
 	crit := len(fields) > 15 && isTruthy(fields[15])
 	glancing := len(fields) > 16 && isTruthy(fields[16])
+	crushing := len(fields) > 17 && isTruthy(fields[17])
 
 	src := p.resolveSource(srcGUID, srcName, srcFlags)
 	p.ensureActor(dstGUID, dstName, dstFlags)
@@ -511,6 +651,33 @@ func (p *Parser) handleSpellDamage(ts time.Time, fields []string, periodic bool)
 	if (dstFlags&FlagPlayer) == 0 && (dstFlags&FlagNPC) != 0 {
 		p.cur.EnemyDamageTaken[unquote(dstName)] += amount
 	}
+
+	flags := 0
+	if crit {
+		flags |= EventFlagCrit
+	}
+	if glancing {
+		flags |= EventFlagGlancing
+	}
+	if crushing {
+		flags |= EventFlagCrushing
+	}
+	if periodic {
+		flags |= EventFlagPeriodic
+	}
+	p.appendEvent(CombatEvent{
+		Ts:         ts,
+		EventType:  EventDamage,
+		SourceGUID: src,
+		TargetGUID: dstGUID,
+		SpellID:    spellID,
+		Amount:     int(amount),
+		Overkill:   int(overkill),
+		Absorbed:   int(absorbed),
+		Resisted:   int(resisted),
+		Blocked:    int(blocked),
+		Flags:      flags,
+	})
 }
 
 func (p *Parser) handleSwingMissed(ts time.Time, fields []string) {
@@ -524,10 +691,29 @@ func (p *Parser) handleSwingMissed(ts time.Time, fields []string) {
 	src := p.resolveSource(srcGUID, srcName, srcFlags)
 	p.ensureActor(dstGUID, dstName, dstFlags)
 	_ = p.fightActor(src, ts)
-	if missType != "MISS" {
-		return
+	p.noteAbility(SpellMeleeID, SpellMeleeName, 1)
+
+	mt := parseMissType(missType)
+	if missType == "MISS" {
+		p.addSpellMiss(src, SpellMeleeID, SpellMeleeName, 1, MetricDamage)
 	}
-	p.addSpellMiss(src, SpellMeleeID, SpellMeleeName, 1, MetricDamage)
+	var missPtr *int16
+	if mt != 0 {
+		missPtr = &mt
+	}
+	amount := 0
+	if len(fields) > 7 {
+		amount = int(parseInt64(fields[7]))
+	}
+	p.appendEvent(CombatEvent{
+		Ts:         ts,
+		EventType:  EventMiss,
+		SourceGUID: src,
+		TargetGUID: dstGUID,
+		SpellID:    SpellMeleeID,
+		Amount:     amount,
+		MissType:   missPtr,
+	})
 }
 
 func (p *Parser) handleSpellMissed(ts time.Time, fields []string) {
@@ -545,10 +731,29 @@ func (p *Parser) handleSpellMissed(ts time.Time, fields []string) {
 	src := p.resolveSource(srcGUID, srcName, srcFlags)
 	p.ensureActor(dstGUID, dstName, parseFlags(fields[5]))
 	_ = p.fightActor(src, ts)
-	if missType != "MISS" {
-		return
+	p.noteAbility(spellID, spellName, school)
+
+	mt := parseMissType(missType)
+	if missType == "MISS" {
+		p.addSpellMiss(src, spellID, spellName, school, MetricDamage)
 	}
-	p.addSpellMiss(src, spellID, spellName, school, MetricDamage)
+	var missPtr *int16
+	if mt != 0 {
+		missPtr = &mt
+	}
+	amount := 0
+	if len(fields) > 10 {
+		amount = int(parseInt64(fields[10]))
+	}
+	p.appendEvent(CombatEvent{
+		Ts:         ts,
+		EventType:  EventMiss,
+		SourceGUID: src,
+		TargetGUID: dstGUID,
+		SpellID:    spellID,
+		Amount:     amount,
+		MissType:   missPtr,
+	})
 }
 
 func (p *Parser) handleHeal(ts time.Time, fields []string, periodic bool) {
@@ -563,8 +768,12 @@ func (p *Parser) handleHeal(ts time.Time, fields []string, periodic bool) {
 	school := int(parseInt64(fields[8]))
 	amount := parseInt64(fields[9])
 	overheal := int64(0)
+	absorbed := int64(0)
 	if len(fields) > 10 {
 		overheal = parseInt64(fields[10])
+	}
+	if len(fields) > 11 {
+		absorbed = parseInt64(fields[11])
 	}
 	crit := len(fields) > 12 && isTruthy(fields[12])
 
@@ -576,17 +785,151 @@ func (p *Parser) handleHeal(ts time.Time, fields []string, periodic bool) {
 		agg.Overheal += overheal
 	}
 	p.addSpell(src, spellID, spellName, school, MetricHealing, amount, crit, periodic, false)
+
+	flags := 0
+	if crit {
+		flags |= EventFlagCrit
+	}
+	if periodic {
+		flags |= EventFlagPeriodic
+	}
+	p.appendEvent(CombatEvent{
+		Ts:         ts,
+		EventType:  EventHeal,
+		SourceGUID: src,
+		TargetGUID: dstGUID,
+		SpellID:    spellID,
+		Amount:     int(amount),
+		Overheal:   int(overheal),
+		Absorbed:   int(absorbed),
+		Flags:      flags,
+	})
 }
 
-func (p *Parser) handleDeath(fields []string) {
+func (p *Parser) handleDeath(ts time.Time, fields []string) {
 	if len(fields) < 6 || p.cur == nil {
 		return
 	}
-	dstName := unquote(fields[4])
-	dstFlags := parseFlags(fields[5])
+	srcGUID, srcName, srcFlags := fields[0], fields[1], parseFlags(fields[2])
+	dstGUID, dstName, dstFlags := fields[3], fields[4], parseFlags(fields[5])
+	p.ensureActor(srcGUID, srcName, srcFlags)
+	p.ensureActor(dstGUID, dstName, dstFlags)
+	_ = p.fightActor(dstGUID, ts)
+
 	if (dstFlags&FlagPlayer) == 0 && dstName != "" && dstName != "nil" {
-		p.cur.EnemyDied[dstName] = true
+		p.cur.EnemyDied[unquote(dstName)] = true
 	}
+	p.appendEvent(CombatEvent{
+		Ts:         ts,
+		EventType:  EventDeath,
+		SourceGUID: srcGUID,
+		TargetGUID: dstGUID,
+	})
+}
+
+func (p *Parser) handleAura(ts time.Time, fields []string, eventType int16) {
+	if len(fields) < 10 || p.cur == nil {
+		return
+	}
+	srcGUID, srcName, srcFlags := fields[0], fields[1], parseFlags(fields[2])
+	dstGUID, dstName, dstFlags := fields[3], fields[4], parseFlags(fields[5])
+	spellID := int(parseInt64(fields[6]))
+	spellName := unquote(fields[7])
+	school := int(parseInt64(fields[8]))
+	auraType := strings.ToUpper(unquote(fields[9]))
+
+	p.ensureActor(srcGUID, srcName, srcFlags)
+	p.ensureActor(dstGUID, dstName, dstFlags)
+	p.noteAbility(spellID, spellName, school)
+
+	flags := 0
+	switch auraType {
+	case "BUFF":
+		flags |= EventFlagAuraBuff
+	case "DEBUFF":
+		flags |= EventFlagAuraDebuff
+	}
+	stacks := 0
+	if len(fields) > 10 {
+		stacks = int(parseInt64(fields[10]))
+	}
+	p.appendEvent(CombatEvent{
+		Ts:         ts,
+		EventType:  eventType,
+		SourceGUID: srcGUID,
+		TargetGUID: dstGUID,
+		SpellID:    spellID,
+		Flags:      flags,
+		Extra:      stacks,
+	})
+}
+
+func (p *Parser) handleInterrupt(ts time.Time, fields []string) {
+	// prefix + spellId,name,school + extraSpellId,extraSpellName,extraSchool
+	if len(fields) < 12 || p.cur == nil {
+		return
+	}
+	srcGUID, srcName, srcFlags := fields[0], fields[1], parseFlags(fields[2])
+	dstGUID, dstName, dstFlags := fields[3], fields[4], parseFlags(fields[5])
+	spellID := int(parseInt64(fields[6]))
+	spellName := unquote(fields[7])
+	school := int(parseInt64(fields[8]))
+	extraSpellID := int(parseInt64(fields[9]))
+	extraName := unquote(fields[10])
+	extraSchool := int(parseInt64(fields[11]))
+
+	p.ensureActor(srcGUID, srcName, srcFlags)
+	p.ensureActor(dstGUID, dstName, dstFlags)
+	p.noteAbility(spellID, spellName, school)
+	p.noteAbility(extraSpellID, extraName, extraSchool)
+
+	p.appendEvent(CombatEvent{
+		Ts:         ts,
+		EventType:  EventInterrupt,
+		SourceGUID: srcGUID,
+		TargetGUID: dstGUID,
+		SpellID:    spellID,
+		Extra:      extraSpellID,
+	})
+}
+
+func (p *Parser) handleDispel(ts time.Time, fields []string) {
+	// prefix + spellId,name,school + extraSpellId,extraSpellName,extraSchool[,auraType]
+	if len(fields) < 12 || p.cur == nil {
+		return
+	}
+	srcGUID, srcName, srcFlags := fields[0], fields[1], parseFlags(fields[2])
+	dstGUID, dstName, dstFlags := fields[3], fields[4], parseFlags(fields[5])
+	spellID := int(parseInt64(fields[6]))
+	spellName := unquote(fields[7])
+	school := int(parseInt64(fields[8]))
+	extraSpellID := int(parseInt64(fields[9]))
+	extraName := unquote(fields[10])
+	extraSchool := int(parseInt64(fields[11]))
+
+	p.ensureActor(srcGUID, srcName, srcFlags)
+	p.ensureActor(dstGUID, dstName, dstFlags)
+	p.noteAbility(spellID, spellName, school)
+	p.noteAbility(extraSpellID, extraName, extraSchool)
+
+	flags := 0
+	if len(fields) > 12 {
+		switch strings.ToUpper(unquote(fields[12])) {
+		case "BUFF":
+			flags |= EventFlagAuraBuff
+		case "DEBUFF":
+			flags |= EventFlagAuraDebuff
+		}
+	}
+	p.appendEvent(CombatEvent{
+		Ts:         ts,
+		EventType:  EventDispel,
+		SourceGUID: srcGUID,
+		TargetGUID: dstGUID,
+		SpellID:    spellID,
+		Flags:      flags,
+		Extra:      extraSpellID,
+	})
 }
 
 func isCombatEvent(event string) bool {
@@ -597,6 +940,46 @@ func isCombatEvent(event string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func isSupportEvent(event string) bool {
+	switch event {
+	case "SPELL_AURA_APPLIED", "SPELL_AURA_APPLIED_DOSE",
+		"SPELL_AURA_REMOVED", "SPELL_AURA_REMOVED_DOSE",
+		"SPELL_AURA_REFRESH",
+		"SPELL_INTERRUPT",
+		"SPELL_DISPEL", "SPELL_STOLEN", "SPELL_DISPEL_FAILED":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseMissType(s string) int16 {
+	switch strings.ToUpper(s) {
+	case "MISS":
+		return MissTypeMiss
+	case "DODGE":
+		return MissTypeDodge
+	case "PARRY":
+		return MissTypeParry
+	case "BLOCK":
+		return MissTypeBlock
+	case "EVADE":
+		return MissTypeEvade
+	case "IMMUNE":
+		return MissTypeImmune
+	case "DEFLECT":
+		return MissTypeDeflect
+	case "ABSORB":
+		return MissTypeAbsorb
+	case "REFLECT":
+		return MissTypeReflect
+	case "RESIST":
+		return MissTypeResist
+	default:
+		return 0
 	}
 }
 
