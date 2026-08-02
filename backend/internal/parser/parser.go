@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"rg-logs/internal/wow"
 )
 
 const (
@@ -220,17 +222,35 @@ func (p *Parser) handleLine(line string) error {
 		return nil
 	}
 
+	hostile := isHostileEngagement(event, fields)
+
 	if p.hasCombat && ts.Sub(p.lastCombat) >= FightGap {
 		p.closeFight()
 	}
 
+	// First engagement of a known boss closes any preceding trash segment.
+	if hostile && p.cur != nil {
+		if name := hostileBossName(event, fields); name != "" && !fightHasKnownBoss(p.cur) {
+			p.closeFight()
+		}
+	}
+
 	if p.cur == nil {
+		// Friendly heals / OOC ticks must not open a fight.
+		if !hostile {
+			return nil
+		}
 		p.cur = newFight(ts)
 	}
 
-	p.lastCombat = ts
-	p.hasCombat = true
-	p.cur.EndTs = ts
+	if hostile {
+		p.lastCombat = ts
+		p.hasCombat = true
+		p.cur.EndTs = ts
+	} else if p.hasCombat && ts.Sub(p.lastCombat) < FightGap {
+		// Heals during an active pull may extend the window; OOC ticks after the gap do not.
+		p.cur.EndTs = ts
+	}
 	p.cur.EventCount++
 
 	switch event {
@@ -250,6 +270,10 @@ func (p *Parser) handleLine(line string) error {
 		p.handleHeal(ts, fields, true)
 	case "UNIT_DIED", "PARTY_KILL":
 		p.handleDeath(ts, fields)
+		// End boss encounters on boss death so trailing OOC heals don't inflate duration.
+		if name := hostileBossName(event, fields); name != "" && p.cur != nil && fightHasKnownBoss(p.cur) {
+			p.closeFight()
+		}
 	}
 	return nil
 }
@@ -941,6 +965,63 @@ func isCombatEvent(event string) bool {
 	default:
 		return false
 	}
+}
+
+// isHostileEngagement reports whether the event should start a fight or reset the
+// out-of-combat gap timer. Friendly heals (including OOC HoTs like Fel Armor) do not.
+func isHostileEngagement(event string, fields []string) bool {
+	switch event {
+	case "SPELL_HEAL", "SPELL_PERIODIC_HEAL":
+		return false
+	case "UNIT_DIED", "PARTY_KILL":
+		if len(fields) < 6 {
+			return false
+		}
+		return isNPCFlags(parseFlags(fields[5]))
+	default:
+		if len(fields) < 6 {
+			return false
+		}
+		return isNPCFlags(parseFlags(fields[2])) || isNPCFlags(parseFlags(fields[5]))
+	}
+}
+
+func isNPCFlags(flags int64) bool {
+	return (flags&FlagNPC) != 0 && (flags&FlagPlayer) == 0
+}
+
+func hostileBossName(event string, fields []string) string {
+	if len(fields) < 6 {
+		return ""
+	}
+	check := func(name string, flags int64) string {
+		name = unquote(name)
+		if name == "" || name == "nil" || !isNPCFlags(flags) {
+			return ""
+		}
+		if wow.IsKnownBoss(name) {
+			return name
+		}
+		return ""
+	}
+	switch event {
+	case "UNIT_DIED", "PARTY_KILL":
+		return check(fields[4], parseFlags(fields[5]))
+	default:
+		if n := check(fields[1], parseFlags(fields[2])); n != "" {
+			return n
+		}
+		return check(fields[4], parseFlags(fields[5]))
+	}
+}
+
+func fightHasKnownBoss(f *FightResult) bool {
+	for name := range f.EnemyDamageTaken {
+		if wow.IsKnownBoss(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func isSupportEvent(event string) bool {

@@ -142,6 +142,7 @@ export function normalizeUpload(raw: unknown): Upload {
     })(),
     contentHash: asString(pick(o, 'contentHash', 'content_hash')) || undefined,
     isPrivate: asBool(pick(o, 'isPrivate', 'is_private')),
+    includeTrash: asBool(pick(o, 'includeTrash', 'include_trash')),
     createdAt: asString(pick(o, 'createdAt', 'created_at')),
     processedAt: (() => {
       const p = pick<unknown>(o, 'processedAt', 'processed_at')
@@ -246,12 +247,15 @@ export async function getUpload(id: string): Promise<Upload> {
 
 export async function uploadFile(
   file: File,
-  opts?: { isPrivate?: boolean; name?: string },
+  opts?: { isPrivate?: boolean; includeTrash?: boolean; name?: string },
 ): Promise<Upload> {
   const form = new FormData()
   form.append('file', file)
   if (opts?.isPrivate) {
     form.append('is_private', 'true')
+  }
+  if (opts?.includeTrash) {
+    form.append('include_trash', 'true')
   }
   if (opts?.name?.trim()) {
     form.append('name', opts.name.trim())

@@ -12,6 +12,7 @@ export function UploadPage() {
   const [file, setFile] = useState<File | null>(null)
   const [name, setName] = useState('')
   const [isPrivate, setIsPrivate] = useState(false)
+  const [includeTrash, setIncludeTrash] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -39,6 +40,7 @@ export function UploadPage() {
     try {
       const result = await uploadFile(file, {
         isPrivate,
+        includeTrash,
         name: name.trim() || undefined,
       })
       setProgress('Fertig — Weiterleitung…')
@@ -144,6 +146,16 @@ export function UploadPage() {
           className="rounded border-border"
         />
         Privat (nur für dich sichtbar)
+      </label>
+
+      <label className="flex items-center gap-2 text-sm text-text-muted">
+        <input
+          type="checkbox"
+          checked={includeTrash}
+          onChange={(e) => setIncludeTrash(e.target.checked)}
+          className="rounded border-border"
+        />
+        Trash-Mobs mitauswerten
       </label>
 
       {error ? (

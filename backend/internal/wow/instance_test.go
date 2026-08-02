@@ -16,3 +16,21 @@ func TestDetectInstance(t *testing.T) {
 		t.Fatalf("expected empty, got %q", got)
 	}
 }
+
+func TestIsKnownBoss(t *testing.T) {
+	if !IsKnownBoss("Sindragosa") {
+		t.Fatal("expected Sindragosa known")
+	}
+	if !IsKnownBoss("Flame Leviathan") {
+		t.Fatal("expected Flame Leviathan known")
+	}
+	if IsKnownBoss("Trash") {
+		t.Fatal("Trash must not be a boss")
+	}
+	if IsKnownBoss("Zombie") {
+		t.Fatal("Zombie must not be a boss")
+	}
+	if IsKnownBoss("") {
+		t.Fatal("empty title must not be a boss")
+	}
+}

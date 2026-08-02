@@ -114,6 +114,7 @@ func (h *Handler) CreateUpload(c fiber.Ctx) error {
 	}
 
 	isPrivate := parseBoolForm(c.FormValue("is_private"), c.FormValue("isPrivate"))
+	includeTrash := parseBoolForm(c.FormValue("include_trash"), c.FormValue("includeTrash"))
 	name := strings.TrimSpace(firstNonEmpty(c.FormValue("name"), c.FormValue("Name")))
 
 	id := uuid.New()
@@ -129,14 +130,15 @@ func (h *Handler) CreateUpload(c fiber.Ctx) error {
 	}
 
 	upload, err := h.Store.CreateUpload(c.Context(), db.CreateUploadParams{
-		ID:          id,
-		UserID:      user.ID,
-		Name:        name,
-		Filename:    filename,
-		SizeBytes:   int64(len(data)),
-		ContentHash: contentHash,
-		IsPrivate:   isPrivate,
-		StoragePath: storagePath,
+		ID:           id,
+		UserID:       user.ID,
+		Name:         name,
+		Filename:     filename,
+		SizeBytes:    int64(len(data)),
+		ContentHash:  contentHash,
+		IsPrivate:    isPrivate,
+		IncludeTrash: includeTrash,
+		StoragePath:  storagePath,
 	})
 	if err != nil {
 		_ = h.Storage.Delete(c.Context(), storagePath)

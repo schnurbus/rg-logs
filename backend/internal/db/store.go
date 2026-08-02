@@ -25,29 +25,31 @@ const (
 )
 
 type Upload struct {
-	ID          uuid.UUID    `json:"id"`
-	UserID      uuid.UUID    `json:"userId"`
-	Name        string       `json:"name"`
-	Filename    string       `json:"filename"`
-	SizeBytes   int64        `json:"sizeBytes"`
-	Status      UploadStatus `json:"status"`
-	Error       *string      `json:"error"`
-	ContentHash string       `json:"contentHash"`
-	IsPrivate   bool         `json:"isPrivate"`
-	StoragePath string       `json:"-"`
-	CreatedAt   time.Time    `json:"createdAt"`
-	ProcessedAt *time.Time   `json:"processedAt"`
+	ID           uuid.UUID    `json:"id"`
+	UserID       uuid.UUID    `json:"userId"`
+	Name         string       `json:"name"`
+	Filename     string       `json:"filename"`
+	SizeBytes    int64        `json:"sizeBytes"`
+	Status       UploadStatus `json:"status"`
+	Error        *string      `json:"error"`
+	ContentHash  string       `json:"contentHash"`
+	IsPrivate    bool         `json:"isPrivate"`
+	IncludeTrash bool         `json:"includeTrash"`
+	StoragePath  string       `json:"-"`
+	CreatedAt    time.Time    `json:"createdAt"`
+	ProcessedAt  *time.Time   `json:"processedAt"`
 }
 
 type CreateUploadParams struct {
-	ID          uuid.UUID
-	UserID      uuid.UUID
-	Name        string
-	Filename    string
-	SizeBytes   int64
-	ContentHash string
-	IsPrivate   bool
-	StoragePath string
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	Name         string
+	Filename     string
+	SizeBytes    int64
+	ContentHash  string
+	IsPrivate    bool
+	IncludeTrash bool
+	StoragePath  string
 }
 
 type Fight struct {
@@ -128,24 +130,25 @@ func NewStore(pool *pgxpool.Pool) *Store {
 
 func (s *Store) CreateUpload(ctx context.Context, p CreateUploadParams) (*Upload, error) {
 	u := &Upload{
-		ID:          p.ID,
-		UserID:      p.UserID,
-		Name:        p.Name,
-		Filename:    p.Filename,
-		SizeBytes:   p.SizeBytes,
-		Status:      StatusPending,
-		ContentHash: p.ContentHash,
-		IsPrivate:   p.IsPrivate,
-		StoragePath: p.StoragePath,
-		CreatedAt:   time.Now().UTC(),
+		ID:           p.ID,
+		UserID:       p.UserID,
+		Name:         p.Name,
+		Filename:     p.Filename,
+		SizeBytes:    p.SizeBytes,
+		Status:       StatusPending,
+		ContentHash:  p.ContentHash,
+		IsPrivate:    p.IsPrivate,
+		IncludeTrash: p.IncludeTrash,
+		StoragePath:  p.StoragePath,
+		CreatedAt:    time.Now().UTC(),
 	}
 	_, err := s.Pool.Exec(ctx, `
 		INSERT INTO uploads (
 			id, user_id, name, filename, size_bytes, status, created_at,
-			content_hash, is_private, storage_path
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			content_hash, is_private, include_trash, storage_path
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		u.ID, u.UserID, u.Name, u.Filename, u.SizeBytes, u.Status, u.CreatedAt,
-		u.ContentHash, u.IsPrivate, u.StoragePath,
+		u.ContentHash, u.IsPrivate, u.IncludeTrash, u.StoragePath,
 	)
 	if err != nil {
 		return nil, err
@@ -156,7 +159,7 @@ func (s *Store) CreateUpload(ctx context.Context, p CreateUploadParams) (*Upload
 func (s *Store) GetUploadByUserHash(ctx context.Context, userID uuid.UUID, contentHash string) (*Upload, error) {
 	return s.scanUpload(ctx, `
 		SELECT id, user_id, name, filename, size_bytes, status, error, content_hash,
-		       is_private, storage_path, created_at, processed_at
+		       is_private, include_trash, storage_path, created_at, processed_at
 		FROM uploads WHERE user_id=$1 AND content_hash=$2`, userID, contentHash)
 }
 
@@ -174,21 +177,21 @@ func (s *Store) ListUploads(ctx context.Context, viewerID *uuid.UUID, mineOnly b
 		}
 		rows, err = s.Pool.Query(ctx, `
 			SELECT id, user_id, name, filename, size_bytes, status, error, content_hash,
-			       is_private, storage_path, created_at, processed_at
+			       is_private, include_trash, storage_path, created_at, processed_at
 			FROM uploads
 			WHERE user_id=$1
 			ORDER BY created_at DESC`, *viewerID)
 	case viewerID != nil:
 		rows, err = s.Pool.Query(ctx, `
 			SELECT id, user_id, name, filename, size_bytes, status, error, content_hash,
-			       is_private, storage_path, created_at, processed_at
+			       is_private, include_trash, storage_path, created_at, processed_at
 			FROM uploads
 			WHERE is_private = FALSE OR user_id=$1
 			ORDER BY created_at DESC`, *viewerID)
 	default:
 		rows, err = s.Pool.Query(ctx, `
 			SELECT id, user_id, name, filename, size_bytes, status, error, content_hash,
-			       is_private, storage_path, created_at, processed_at
+			       is_private, include_trash, storage_path, created_at, processed_at
 			FROM uploads
 			WHERE is_private = FALSE
 			ORDER BY created_at DESC`)
@@ -215,7 +218,7 @@ func (s *Store) ListUploads(ctx context.Context, viewerID *uuid.UUID, mineOnly b
 func (s *Store) GetUpload(ctx context.Context, id uuid.UUID) (*Upload, error) {
 	return s.scanUpload(ctx, `
 		SELECT id, user_id, name, filename, size_bytes, status, error, content_hash,
-		       is_private, storage_path, created_at, processed_at
+		       is_private, include_trash, storage_path, created_at, processed_at
 		FROM uploads WHERE id=$1`, id)
 }
 
@@ -253,7 +256,7 @@ func (s *Store) DeleteUpload(ctx context.Context, id uuid.UUID) error {
 func (s *Store) GetUploadByFightID(ctx context.Context, fightID uuid.UUID) (*Upload, error) {
 	return s.scanUpload(ctx, `
 		SELECT u.id, u.user_id, u.name, u.filename, u.size_bytes, u.status, u.error, u.content_hash,
-		       u.is_private, u.storage_path, u.created_at, u.processed_at
+		       u.is_private, u.include_trash, u.storage_path, u.created_at, u.processed_at
 		FROM uploads u
 		JOIN fights f ON f.upload_id = u.id
 		WHERE f.id=$1`, fightID)
@@ -264,7 +267,7 @@ func (s *Store) scanUpload(ctx context.Context, query string, args ...any) (*Upl
 	var u Upload
 	err := row.Scan(
 		&u.ID, &u.UserID, &u.Name, &u.Filename, &u.SizeBytes, &u.Status, &u.Error,
-		&u.ContentHash, &u.IsPrivate, &u.StoragePath, &u.CreatedAt, &u.ProcessedAt,
+		&u.ContentHash, &u.IsPrivate, &u.IncludeTrash, &u.StoragePath, &u.CreatedAt, &u.ProcessedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -280,7 +283,7 @@ func scanUploadRow(row rowScanner) (*Upload, error) {
 	var u Upload
 	err := row.Scan(
 		&u.ID, &u.UserID, &u.Name, &u.Filename, &u.SizeBytes, &u.Status, &u.Error,
-		&u.ContentHash, &u.IsPrivate, &u.StoragePath, &u.CreatedAt, &u.ProcessedAt,
+		&u.ContentHash, &u.IsPrivate, &u.IncludeTrash, &u.StoragePath, &u.CreatedAt, &u.ProcessedAt,
 	)
 	if err != nil {
 		return nil, err

@@ -1,0 +1,3 @@
+-- +migrate Up
+ALTER TABLE uploads
+    ADD COLUMN IF NOT EXISTS include_trash BOOLEAN NOT NULL DEFAULT FALSE;

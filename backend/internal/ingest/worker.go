@@ -91,14 +91,15 @@ func (w *Worker) process(job Job) {
 }
 
 func (w *Worker) runParse(ctx context.Context, job Job) error {
+	upload, err := w.store.GetUpload(ctx, job.UploadID)
+	if err != nil {
+		return fmt.Errorf("load upload: %w", err)
+	}
 	path := job.StoragePath
 	if path == "" {
-		upload, err := w.store.GetUpload(ctx, job.UploadID)
-		if err != nil {
-			return fmt.Errorf("load upload: %w", err)
-		}
 		path = upload.StoragePath
 	}
+	includeTrash := upload.IncludeTrash
 
 	rc, err := w.storage.Download(ctx, path)
 	if err != nil {
@@ -228,6 +229,10 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 
 	fights := make([]db.PersistedFight, 0, len(result.Fights))
 	for _, fr := range result.Fights {
+		if !includeTrash && !wow.IsKnownBoss(fr.Title) {
+			continue
+		}
+
 		pf := db.PersistedFight{
 			ID:               fr.ID,
 			StartTs:          fr.StartTs,
@@ -325,10 +330,6 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 		return err
 	}
 
-	upload, err := w.store.GetUpload(ctx, job.UploadID)
-	if err != nil {
-		return fmt.Errorf("reload upload: %w", err)
-	}
 	if strings.TrimSpace(upload.Name) == "" {
 		titles := make([]string, 0, len(fights))
 		for _, f := range fights {

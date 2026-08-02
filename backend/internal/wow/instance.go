@@ -26,6 +26,16 @@ func DetectInstance(fightTitles []string) string {
 	return best
 }
 
+// IsKnownBoss reports whether title matches a known WotLK boss (EN/DE) in bossInstances.
+func IsKnownBoss(title string) bool {
+	key := normalizeBoss(title)
+	if key == "" || key == "trash" {
+		return false
+	}
+	_, ok := bossInstances[key]
+	return ok
+}
+
 func normalizeBoss(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	s = strings.ReplaceAll(s, "’", "'")
@@ -36,31 +46,31 @@ func normalizeBoss(name string) string {
 // bossInstances maps normalized EN/DE boss names to display instance names (German).
 var bossInstances = map[string]string{
 	// Naxxramas
-	"anub'rekhan":                 "Naxxramas",
-	"großwitwe faerlina":          "Naxxramas",
-	"grand widow faerlina":        "Naxxramas",
-	"maexxna":                     "Naxxramas",
-	"noth der seuchenfürst":       "Naxxramas",
-	"noth the plaguebringer":      "Naxxramas",
-	"heigan der unreine":          "Naxxramas",
-	"heigan the unclean":          "Naxxramas",
-	"loatheb":                     "Naxxramas",
-	"instrukteur razuvious":       "Naxxramas",
-	"instructor razuvious":        "Naxxramas",
-	"gothik der ernter":           "Naxxramas",
-	"gothik the harvester":        "Naxxramas",
-	"die vier reiter":             "Naxxramas",
-	"the four horsemen":           "Naxxramas",
-	"thane korth'azz":             "Naxxramas",
-	"sir zeliek":                  "Naxxramas",
-	"lady blaumeux":               "Naxxramas",
-	"baron rivendare":             "Naxxramas",
-	"patchwerk":                   "Naxxramas",
-	"grobbulus":                   "Naxxramas",
-	"gluth":                       "Naxxramas",
-	"thaddius":                    "Naxxramas",
-	"sapphiron":                   "Naxxramas",
-	"kel'thuzad":                  "Naxxramas",
+	"anub'rekhan":            "Naxxramas",
+	"großwitwe faerlina":     "Naxxramas",
+	"grand widow faerlina":   "Naxxramas",
+	"maexxna":                "Naxxramas",
+	"noth der seuchenfürst":  "Naxxramas",
+	"noth the plaguebringer": "Naxxramas",
+	"heigan der unreine":     "Naxxramas",
+	"heigan the unclean":     "Naxxramas",
+	"loatheb":                "Naxxramas",
+	"instrukteur razuvious":  "Naxxramas",
+	"instructor razuvious":   "Naxxramas",
+	"gothik der ernter":      "Naxxramas",
+	"gothik the harvester":   "Naxxramas",
+	"die vier reiter":        "Naxxramas",
+	"the four horsemen":      "Naxxramas",
+	"thane korth'azz":        "Naxxramas",
+	"sir zeliek":             "Naxxramas",
+	"lady blaumeux":          "Naxxramas",
+	"baron rivendare":        "Naxxramas",
+	"patchwerk":              "Naxxramas",
+	"grobbulus":              "Naxxramas",
+	"gluth":                  "Naxxramas",
+	"thaddius":               "Naxxramas",
+	"sapphiron":              "Naxxramas",
+	"kel'thuzad":             "Naxxramas",
 
 	// Obsidiansanktum
 	"sartharion": "Obsidiansanktum",
@@ -132,35 +142,35 @@ var bossInstances = map[string]string{
 	"onyxia": "Onyxias Hort",
 
 	// Eiskronenzitadelle
-	"lord mark'gar":                 "Eiskronenzitadelle",
-	"lord marrowgar":                "Eiskronenzitadelle",
-	"lady todeswisper":              "Eiskronenzitadelle",
-	"lady deathwhisper":             "Eiskronenzitadelle",
+	"lord mark'gar":                           "Eiskronenzitadelle",
+	"lord marrowgar":                          "Eiskronenzitadelle",
+	"lady todeswisper":                        "Eiskronenzitadelle",
+	"lady deathwhisper":                       "Eiskronenzitadelle",
 	"kanonenschiffsschlacht von der eiskrone": "Eiskronenzitadelle",
-	"icecrown gunship battle":       "Eiskronenzitadelle",
-	"todbringer saurfang":           "Eiskronenzitadelle",
-	"deathbringer saurfang":         "Eiskronenzitadelle",
-	"fauldarm":                      "Eiskronenzitadelle",
-	"festergut":                     "Eiskronenzitadelle",
-	"seuchenbeutel":                 "Eiskronenzitadelle",
-	"rotface":                       "Eiskronenzitadelle",
-	"professor seuchenmord":         "Eiskronenzitadelle",
-	"professor putricide":           "Eiskronenzitadelle",
-	"blutrat der blutfürsten":       "Eiskronenzitadelle",
-	"blood prince council":          "Eiskronenzitadelle",
-	"prinz valanar":                 "Eiskronenzitadelle",
-	"prince valanar":                "Eiskronenzitadelle",
-	"prinz keleseth":                "Eiskronenzitadelle",
-	"prince keleseth":               "Eiskronenzitadelle",
-	"prinz taldaram":                "Eiskronenzitadelle",
-	"prince taldaram":               "Eiskronenzitadelle",
-	"blutprinzessin lana'thel":      "Eiskronenzitadelle",
-	"blood-queen lana'thel":         "Eiskronenzitadelle",
-	"valithria traumwandler":        "Eiskronenzitadelle",
-	"valithria dreamwalker":         "Eiskronenzitadelle",
-	"sindragosa":                    "Eiskronenzitadelle",
-	"der lichkönig":                 "Eiskronenzitadelle",
-	"the lich king":                 "Eiskronenzitadelle",
+	"icecrown gunship battle":                 "Eiskronenzitadelle",
+	"todbringer saurfang":                     "Eiskronenzitadelle",
+	"deathbringer saurfang":                   "Eiskronenzitadelle",
+	"fauldarm":                                "Eiskronenzitadelle",
+	"festergut":                               "Eiskronenzitadelle",
+	"seuchenbeutel":                           "Eiskronenzitadelle",
+	"rotface":                                 "Eiskronenzitadelle",
+	"professor seuchenmord":                   "Eiskronenzitadelle",
+	"professor putricide":                     "Eiskronenzitadelle",
+	"blutrat der blutfürsten":                 "Eiskronenzitadelle",
+	"blood prince council":                    "Eiskronenzitadelle",
+	"prinz valanar":                           "Eiskronenzitadelle",
+	"prince valanar":                          "Eiskronenzitadelle",
+	"prinz keleseth":                          "Eiskronenzitadelle",
+	"prince keleseth":                         "Eiskronenzitadelle",
+	"prinz taldaram":                          "Eiskronenzitadelle",
+	"prince taldaram":                         "Eiskronenzitadelle",
+	"blutprinzessin lana'thel":                "Eiskronenzitadelle",
+	"blood-queen lana'thel":                   "Eiskronenzitadelle",
+	"valithria traumwandler":                  "Eiskronenzitadelle",
+	"valithria dreamwalker":                   "Eiskronenzitadelle",
+	"sindragosa":                              "Eiskronenzitadelle",
+	"der lichkönig":                           "Eiskronenzitadelle",
+	"the lich king":                           "Eiskronenzitadelle",
 
 	// Rubinsanktum
 	"halion": "Rubinsanktum",

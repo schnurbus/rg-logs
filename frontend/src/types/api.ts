@@ -42,6 +42,7 @@ export interface Upload {
   error?: string | null
   contentHash?: string
   isPrivate?: boolean
+  includeTrash?: boolean
   createdAt: string
   processedAt?: string | null
   fights?: FightSummary[]

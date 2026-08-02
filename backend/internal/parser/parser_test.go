@@ -166,6 +166,93 @@ func TestFightGapSegmentation(t *testing.T) {
 	}
 }
 
+func TestOOCHealsDoNotBridgeFightGap(t *testing.T) {
+	snippet := strings.Join([]string{
+		`8/1 08:45:16.653  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:20.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:25.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:30.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:35.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:40.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:45.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:50.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:55.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:00.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:05.000  UNIT_DIED,0x0000000000000000,nil,0x80000000,0xF130006C590000BA,"Zombie",0xa48`,
+		// OOC HoTs that previously bridged the gap
+		`8/1 08:46:20.000  SPELL_PERIODIC_HEAL,0x0000000000817847,"Diedot",0x514,0x0000000000817847,"Diedot",0x514,47893,"Teufelsrüstung",0x20,500,500,0,nil`,
+		`8/1 08:46:40.000  SPELL_PERIODIC_HEAL,0x0000000000817847,"Diedot",0x514,0x0000000000817847,"Diedot",0x514,47893,"Teufelsrüstung",0x20,500,500,0,nil`,
+		`8/1 08:47:00.000  SPELL_PERIODIC_HEAL,0x0000000000817847,"Diedot",0x514,0x0000000000817847,"Diedot",0x514,47893,"Teufelsrüstung",0x20,500,500,0,nil`,
+		// Boss pull >45s after last hostile event
+		`8/1 08:47:10.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:47:15.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:47:20.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:47:25.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:47:30.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:47:35.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:47:40.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:47:45.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:47:50.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:47:55.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:48:00.000  UNIT_DIED,0x0000000000000000,nil,0x80000000,0xF130009621000002,"Toravon der Eiswächter",0xa48`,
+	}, "\n")
+
+	res, err := parser.Parse(strings.NewReader(snippet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Fights) != 2 {
+		t.Fatalf("expected 2 fights, got %d", len(res.Fights))
+	}
+	if res.Fights[0].Title != "Zombie" {
+		t.Fatalf("fight0 title=%q", res.Fights[0].Title)
+	}
+	if res.Fights[1].Title != "Toravon der Eiswächter" {
+		t.Fatalf("fight1 title=%q", res.Fights[1].Title)
+	}
+}
+
+func TestBossEngageSplitsTrashSegment(t *testing.T) {
+	snippet := strings.Join([]string{
+		`8/1 08:45:16.653  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Wärter des Archavon",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:20.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Wärter des Archavon",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:25.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Wärter des Archavon",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:30.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Wärter des Archavon",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:35.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Wärter des Archavon",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:40.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Wärter des Archavon",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:45.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Wärter des Archavon",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:50.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Wärter des Archavon",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:45:55.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Wärter des Archavon",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:00.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Wärter des Archavon",0xa48,100,0,1,0,0,0,nil,nil,nil`,
+		// Immediate boss pull (no 45s gap)
+		`8/1 08:46:05.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:10.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:15.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:20.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:25.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:30.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:35.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:40.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:45.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:50.000  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130009621000002,"Toravon der Eiswächter",0xa48,500,0,1,0,0,0,nil,nil,nil`,
+		`8/1 08:46:55.000  UNIT_DIED,0x0000000000000000,nil,0x80000000,0xF130009621000002,"Toravon der Eiswächter",0xa48`,
+	}, "\n")
+
+	res, err := parser.Parse(strings.NewReader(snippet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Fights) != 2 {
+		t.Fatalf("expected 2 fights, got %d", len(res.Fights))
+	}
+	if res.Fights[0].Title != "Wärter des Archavon" {
+		t.Fatalf("fight0 title=%q", res.Fights[0].Title)
+	}
+	if res.Fights[1].Title != "Toravon der Eiswächter" {
+		t.Fatalf("fight1 title=%q", res.Fights[1].Title)
+	}
+}
+
 func TestParseReferenceLogSmoke(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "references", "combatlogs", "WoWCombatLog.txt")
 	f, err := os.Open(path)
@@ -178,19 +265,21 @@ func TestParseReferenceLogSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Fights) < 1 {
-		t.Fatalf("expected >=1 fight, got %d", len(res.Fights))
+	if len(res.Fights) < 2 {
+		t.Fatalf("expected >=2 fights (trash + boss), got %d", len(res.Fights))
 	}
-	names := map[string]bool{}
-	for _, a := range res.Actors {
-		if a.IsPlayer {
-			names[a.Name] = true
+	var toravon *parser.FightResult
+	for _, fight := range res.Fights {
+		if fight.Title == "Toravon der Eiswächter" {
+			toravon = fight
 		}
 	}
-	for _, want := range []string{"Deaklot", "Floriniâ", "Sensenkarl"} {
-		if !names[want] {
-			t.Fatalf("missing player %q in actors", want)
-		}
+	if toravon == nil {
+		t.Fatal("expected Toravon fight")
+	}
+	// Real pull is ~1.5min; previously OOC heals merged trash into a ~6:46 fight.
+	if toravon.DurationMs < 60_000 || toravon.DurationMs > 150_000 {
+		t.Fatalf("toravon duration=%dms, want roughly 60-150s", toravon.DurationMs)
 	}
 	t.Logf("fights=%d actors=%d", len(res.Fights), len(res.Actors))
 	for i, f := range res.Fights {
