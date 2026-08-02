@@ -15,6 +15,7 @@ import {
   formatPercent,
   formatRate,
 } from '../lib/format'
+import { risingGodsProfileURL } from '../lib/risingGods'
 import type { FightDetail, Participant, SpellStat } from '../types/api'
 
 type MetricTab = 'damage' | 'healing' | 'taken'
@@ -267,6 +268,7 @@ export function FightDetailPage() {
             <tr>
               <th className="px-3 py-2 font-medium w-8">#</th>
               <th className="px-3 py-2 font-medium min-w-[12rem]">Name</th>
+              <th className="px-3 py-2 font-medium text-right">GS</th>
               <th className="px-3 py-2 font-medium text-right">Amount</th>
               <th className="px-3 py-2 font-medium text-right">
                 {rateLabel(tab)}
@@ -282,6 +284,7 @@ export function FightDetailPage() {
               const barRatio = maxAmount > 0 ? amount / maxAmount : 0
               const cls = playerClassOf(row.player)
               const active = selected?.actorId === row.player.actorId
+              const profileURL = risingGodsProfileURL(row.player.name)
 
               return (
                 <tr
@@ -297,13 +300,23 @@ export function FightDetailPage() {
                   <td className="px-3 py-2 text-text-muted">{i + 1}</td>
                   <td className="px-1 py-1.5">
                     <MeterBar ratio={barRatio} playerClass={cls}>
-                      <span
-                        className="font-medium"
+                      <a
+                        href={profileURL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Rising Gods Profil"
+                        onClick={(e) => e.stopPropagation()}
+                        className="font-medium hover:underline"
                         style={classTextStyle(cls)}
                       >
                         {row.player.name}
-                      </span>
+                      </a>
                     </MeterBar>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-text-muted">
+                    {row.player.gearScore != null
+                      ? formatNumber(row.player.gearScore)
+                      : '—'}
                   </td>
                   <td className="px-3 py-2 text-right font-mono">
                     {formatNumber(amount)}
@@ -320,7 +333,7 @@ export function FightDetailPage() {
             {rows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-3 py-6 text-center text-text-muted"
                 >
                   Keine Teilnehmer.

@@ -15,6 +15,7 @@ import (
 	"rg-logs/internal/parser"
 	"rg-logs/internal/storage"
 	"rg-logs/internal/wow"
+	"rg-logs/internal/wow/rgprofile"
 )
 
 type Job struct {
@@ -23,10 +24,11 @@ type Job struct {
 }
 
 type Worker struct {
-	store   *db.Store
-	storage *storage.Client
-	queue   chan Job
-	wg      sync.WaitGroup
+	store     *db.Store
+	storage   *storage.Client
+	queue     chan Job
+	wg        sync.WaitGroup
+	rgProfile *rgprofile.Client
 }
 
 func NewWorker(store *db.Store, storageClient *storage.Client, queueSize int) *Worker {
@@ -34,9 +36,10 @@ func NewWorker(store *db.Store, storageClient *storage.Client, queueSize int) *W
 		queueSize = 8
 	}
 	return &Worker{
-		store:   store,
-		storage: storageClient,
-		queue:   make(chan Job, queueSize),
+		store:     store,
+		storage:   storageClient,
+		queue:     make(chan Job, queueSize),
+		rgProfile: rgprofile.NewClient(),
 	}
 }
 
@@ -186,6 +189,8 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 		}
 	}
 
+	w.enrichGearScores(ctx, actors)
+
 	fights := make([]db.PersistedFight, 0, len(result.Fights))
 	for _, fr := range result.Fights {
 		pf := db.PersistedFight{
@@ -274,4 +279,58 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 		}
 	}
 	return nil
+}
+
+// enrichGearScores fetches Rising Gods profiles and sets GearScoreLite on player actors.
+// Failures are logged; missing profiles leave gear_score unset.
+func (w *Worker) enrichGearScores(ctx context.Context, actors []db.PersistedActor) {
+	if w.rgProfile == nil {
+		return
+	}
+
+	type job struct{ idx int }
+	var players []job
+	for i := range actors {
+		if actors[i].IsPlayer && strings.TrimSpace(actors[i].Name) != "" {
+			players = append(players, job{idx: i})
+		}
+	}
+	if len(players) == 0 {
+		return
+	}
+
+	const workers = 3
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, p := range players {
+		p := p
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			name := actors[p.idx].Name
+			ch, err := w.rgProfile.Fetch(ctx, name)
+			if err != nil {
+				log.Printf("ingest: gearscore %q: %v", name, err)
+				return
+			}
+			if ch == nil || ch.GearScore <= 0 {
+				return
+			}
+			gs := ch.GearScore
+			mu.Lock()
+			actors[p.idx].GearScore = &gs
+			// Prefer armory class when combat-log inference missed.
+			if actors[p.idx].Class == nil && ch.Class != "" {
+				cls := string(ch.Class)
+				actors[p.idx].Class = &cls
+			}
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
 }

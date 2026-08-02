@@ -70,6 +70,7 @@ type Actor struct {
 	IsPlayer  bool      `json:"isPlayer"`
 	OwnerGUID *string   `json:"ownerGuid"`
 	Class     *string   `json:"class,omitempty"`
+	GearScore *int      `json:"gearScore,omitempty"`
 }
 
 type ActorStat struct {
@@ -80,6 +81,7 @@ type ActorStat struct {
 	IsPlayer     bool      `json:"isPlayer"`
 	OwnerGUID    *string   `json:"ownerGuid,omitempty"`
 	Class        *string   `json:"class,omitempty"`
+	GearScore    *int      `json:"gearScore,omitempty"`
 	DamageDone   int64     `json:"damageDone"`
 	HealingDone  int64     `json:"healingDone"`
 	Overheal     int64     `json:"overheal"`
@@ -355,7 +357,7 @@ func (s *Store) GetFight(ctx context.Context, id uuid.UUID) (*Fight, error) {
 
 func (s *Store) ListActorStats(ctx context.Context, fightID uuid.UUID) ([]ActorStat, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT a.id, a.name, a.guid, a.is_player, a.owner_guid, a.class,
+		SELECT a.id, a.name, a.guid, a.is_player, a.owner_guid, a.class, a.gear_score,
 		       s.damage_done, s.healing_done, s.overheal, s.damage_taken, s.active_time_ms,
 		       f.duration_ms
 		FROM actor_stats s
@@ -374,7 +376,7 @@ func (s *Store) ListActorStats(ctx context.Context, fightID uuid.UUID) ([]ActorS
 		var durationMs int64
 		st.FightID = fightID
 		if err := rows.Scan(
-			&st.ActorID, &st.Name, &st.GUID, &st.IsPlayer, &st.OwnerGUID, &st.Class,
+			&st.ActorID, &st.Name, &st.GUID, &st.IsPlayer, &st.OwnerGUID, &st.Class, &st.GearScore,
 			&st.DamageDone, &st.HealingDone, &st.Overheal, &st.DamageTaken, &st.ActiveTimeMs,
 			&durationMs,
 		); err != nil {
@@ -619,13 +621,14 @@ func (s *Store) PersistParseResult(ctx context.Context, uploadID uuid.UUID, acto
 
 	for _, a := range actors {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO actors (id, upload_id, guid, name, flags, is_player, owner_guid, class)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			INSERT INTO actors (id, upload_id, guid, name, flags, is_player, owner_guid, class, gear_score)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 			ON CONFLICT (upload_id, guid) DO UPDATE
 			SET name=EXCLUDED.name, flags=EXCLUDED.flags, is_player=EXCLUDED.is_player,
 			    owner_guid=COALESCE(EXCLUDED.owner_guid, actors.owner_guid),
-			    class=COALESCE(EXCLUDED.class, actors.class)`,
-			a.ID, uploadID, a.GUID, a.Name, a.Flags, a.IsPlayer, a.OwnerGUID, a.Class,
+			    class=COALESCE(EXCLUDED.class, actors.class),
+			    gear_score=COALESCE(EXCLUDED.gear_score, actors.gear_score)`,
+			a.ID, uploadID, a.GUID, a.Name, a.Flags, a.IsPlayer, a.OwnerGUID, a.Class, a.GearScore,
 		)
 		if err != nil {
 			return fmt.Errorf("insert actor %s: %w", a.GUID, err)
@@ -699,6 +702,7 @@ type PersistedActor struct {
 	IsPlayer  bool
 	OwnerGUID *string
 	Class     *string
+	GearScore *int
 }
 
 type PersistedFightStat struct {

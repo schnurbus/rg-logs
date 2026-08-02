@@ -51,6 +51,8 @@ export interface Participant {
   ownerGuid?: string
   /** Inferred from signature spell IDs (WotLK). */
   class?: string
+  /** GearScoreLite from Rising Gods profile at ingest time. */
+  gearScore?: number
   damageDone: number
   healingDone: number
   overheal: number

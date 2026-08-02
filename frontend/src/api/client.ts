@@ -79,6 +79,10 @@ export function normalizeParticipant(raw: unknown): Participant {
       ? asString(ownerRaw)
       : undefined
 
+  const gearRaw = pick<unknown>(o, 'gearScore', 'gear_score')
+  const gearScore =
+    gearRaw != null && asNumber(gearRaw) > 0 ? asNumber(gearRaw) : undefined
+
   return {
     actorId: asString(pick(o, 'actorId', 'actor_id')),
     guid: asString(pick(o, 'guid', 'guid')),
@@ -86,6 +90,7 @@ export function normalizeParticipant(raw: unknown): Participant {
     isPlayer: asBool(pick(o, 'isPlayer', 'is_player')),
     ownerGuid,
     class: asPlayerClass(pick(o, 'class', 'class')),
+    gearScore,
     damageDone,
     healingDone,
     overheal: asNumber(pick(o, 'overheal', 'overheal')),
