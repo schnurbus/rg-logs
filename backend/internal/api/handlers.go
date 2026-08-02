@@ -58,6 +58,9 @@ func NewRouter(h *Handler) *fiber.App {
 	authed.Get("/uploads/:id", h.GetUpload)
 	authed.Get("/fights/:id", h.GetFight)
 	authed.Get("/fights/:id/spells", h.GetFightSpells)
+	authed.Get("/fights/:id/auras", h.GetFightAuras)
+	authed.Get("/fights/:id/interrupts", h.GetFightInterrupts)
+	authed.Get("/fights/:id/dispels", h.GetFightDispels)
 
 	write := app.Group("/api", RequireAuth(h.Auth))
 	write.Post("/uploads", h.CreateUpload)
@@ -346,6 +349,72 @@ func (h *Handler) GetFightSpells(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	return c.JSON(spells)
+}
+
+func (h *Handler) GetFightAuras(c fiber.Ctx) error {
+	fightID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid fight id")
+	}
+	if err := h.ensureFightAccess(c, fightID); err != nil {
+		return err
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(c.Query("kind", "buff")))
+	var auraKind db.AuraKind
+	switch kind {
+	case "buff", "buffs":
+		auraKind = db.AuraKindBuff
+	case "debuff", "debuffs":
+		auraKind = db.AuraKindDebuff
+	default:
+		return fiber.NewError(fiber.StatusBadRequest, "kind must be buff or debuff")
+	}
+
+	stats, err := h.Store.ListAuraStats(c.Context(), fightID, auraKind)
+	if err != nil {
+		if db.IsNoRows(err) {
+			return fiber.NewError(fiber.StatusNotFound, "fight not found")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(stats)
+}
+
+func (h *Handler) GetFightInterrupts(c fiber.Ctx) error {
+	fightID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid fight id")
+	}
+	if err := h.ensureFightAccess(c, fightID); err != nil {
+		return err
+	}
+	stats, err := h.Store.ListInterruptStats(c.Context(), fightID)
+	if err != nil {
+		if db.IsNoRows(err) {
+			return fiber.NewError(fiber.StatusNotFound, "fight not found")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(stats)
+}
+
+func (h *Handler) GetFightDispels(c fiber.Ctx) error {
+	fightID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid fight id")
+	}
+	if err := h.ensureFightAccess(c, fightID); err != nil {
+		return err
+	}
+	stats, err := h.Store.ListDispelStats(c.Context(), fightID)
+	if err != nil {
+		if db.IsNoRows(err) {
+			return fiber.NewError(fiber.StatusNotFound, "fight not found")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(stats)
 }
 
 func (h *Handler) ensureFightAccess(c fiber.Ctx, fightID uuid.UUID) error {

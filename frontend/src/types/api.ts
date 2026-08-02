@@ -12,6 +12,9 @@
  *   DELETE /api/uploads/:id        → 204 [owner]
  *   GET  /api/fights/:id           → FightDetail
  *   GET  /api/fights/:id/spells?actorId= → SpellStat[]
+ *   GET  /api/fights/:id/auras?kind=buff|debuff → AuraStat[]
+ *   GET  /api/fights/:id/interrupts → CastCountStat[]
+ *   GET  /api/fights/:id/dispels → CastCountStat[]
  *   GET  /api/health
  */
 
@@ -98,4 +101,30 @@ export interface SpellStat {
   glancingMax: number
   /** Aggregated pet/summon contribution under the owner. */
   pet?: boolean
+}
+
+export type AuraKind = 'buff' | 'debuff'
+
+export interface AuraStat {
+  spellId: number
+  spellName: string
+  school: number
+  applications: number
+  refreshes: number
+  targets: number
+  uptimeMs: number
+  /** Average uptime ratio across targets (0–1). */
+  uptimePct: number
+}
+
+export interface CastCountStat {
+  actorId: string
+  actorName: string
+  class?: string
+  spec?: string
+  spellId: number
+  spellName: string
+  extraSpellId: number
+  extraSpellName: string
+  count: number
 }

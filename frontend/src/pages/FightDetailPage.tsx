@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ApiError, getFight, getFightSpells } from '../api/client'
+import { ApiError, getFight, getFightAuras, getFightDispels, getFightInterrupts, getFightSpells } from '../api/client'
+import { AuraTable } from '../components/AuraTable'
+import { CastCountTable } from '../components/CastCountTable'
 import { ErrorMessage, Loading } from '../components/ErrorMessage'
 import { MeterBar } from '../components/MeterBar'
 import { RaidComposition } from '../components/RaidComposition'
@@ -18,7 +20,13 @@ import {
   formatRate,
 } from '../lib/format'
 import { risingGodsProfileURL } from '../lib/risingGods'
-import type { FightDetail, Participant, SpellStat } from '../types/api'
+import type {
+  AuraStat,
+  CastCountStat,
+  FightDetail,
+  Participant,
+  SpellStat,
+} from '../types/api'
 
 type FightTab =
   | 'summary'
@@ -47,14 +55,7 @@ const TABS: { id: FightTab; label: string }[] = [
   { id: 'dispels', label: 'Bannungen' },
 ]
 
-const PLACEHOLDER_TABS = new Set<FightTab>([
-  'threat',
-  'buffs',
-  'debuffs',
-  'deaths',
-  'interrupts',
-  'dispels',
-])
+const PLACEHOLDER_TABS = new Set<FightTab>(['threat', 'deaths'])
 
 type MeterRow = {
   player: Participant
@@ -380,6 +381,14 @@ export function FightDetailPage() {
   const [spellsError, setSpellsError] = useState<string | null>(null)
   const [spellsLoading, setSpellsLoading] = useState(false)
 
+  const [auras, setAuras] = useState<AuraStat[] | null>(null)
+  const [aurasError, setAurasError] = useState<string | null>(null)
+  const [aurasLoading, setAurasLoading] = useState(false)
+
+  const [castRows, setCastRows] = useState<CastCountStat[] | null>(null)
+  const [castError, setCastError] = useState<string | null>(null)
+  const [castLoading, setCastLoading] = useState(false)
+
   const load = useCallback(async () => {
     if (!fightId) return
     try {
@@ -406,6 +415,72 @@ export function FightDetailPage() {
     setSpells(null)
     setSpellsError(null)
   }, [tab])
+
+  useEffect(() => {
+    if (!fightId) return
+    if (tab !== 'buffs' && tab !== 'debuffs') return
+
+    let cancelled = false
+    setAuras(null)
+    setAurasError(null)
+    setAurasLoading(true)
+    void (async () => {
+      try {
+        const kind = tab === 'buffs' ? 'buff' : 'debuff'
+        const data = await getFightAuras(fightId, kind)
+        if (!cancelled) setAuras(data)
+      } catch (err) {
+        if (!cancelled) {
+          setAurasError(
+            err instanceof ApiError
+              ? `Auras nicht geladen (${err.status})`
+              : err instanceof Error
+                ? err.message
+                : 'Unbekannter Fehler',
+          )
+        }
+      } finally {
+        if (!cancelled) setAurasLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [fightId, tab])
+
+  useEffect(() => {
+    if (!fightId) return
+    if (tab !== 'interrupts' && tab !== 'dispels') return
+
+    let cancelled = false
+    setCastRows(null)
+    setCastError(null)
+    setCastLoading(true)
+    void (async () => {
+      try {
+        const data =
+          tab === 'interrupts'
+            ? await getFightInterrupts(fightId)
+            : await getFightDispels(fightId)
+        if (!cancelled) setCastRows(data)
+      } catch (err) {
+        if (!cancelled) {
+          setCastError(
+            err instanceof ApiError
+              ? `Daten nicht geladen (${err.status})`
+              : err instanceof Error
+                ? err.message
+                : 'Unbekannter Fehler',
+          )
+        }
+      } finally {
+        if (!cancelled) setCastLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [fightId, tab])
 
   const allRows = useMemo(() => {
     if (!fight) return []
@@ -665,6 +740,31 @@ export function FightDetailPage() {
             </p>
           )}
         </>
+      ) : null}
+
+      {tab === 'buffs' || tab === 'debuffs' ? (
+        <div className="space-y-3">
+          {aurasLoading ? <Loading label="Auras laden…" /> : null}
+          {aurasError ? <ErrorMessage message={aurasError} /> : null}
+          {!aurasLoading && !aurasError && auras ? (
+            <AuraTable rows={auras} />
+          ) : null}
+        </div>
+      ) : null}
+
+      {tab === 'interrupts' || tab === 'dispels' ? (
+        <div className="space-y-3">
+          {castLoading ? <Loading label="Daten laden…" /> : null}
+          {castError ? <ErrorMessage message={castError} /> : null}
+          {!castLoading && !castError && castRows ? (
+            <CastCountTable
+              rows={castRows}
+              extraColumnLabel={
+                tab === 'interrupts' ? 'Unterbrochener Spell' : 'Gebannter Spell'
+              }
+            />
+          ) : null}
+        </div>
       ) : null}
 
       {PLACEHOLDER_TABS.has(tab) ? (

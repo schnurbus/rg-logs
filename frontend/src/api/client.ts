@@ -1,4 +1,7 @@
 import type {
+  AuraKind,
+  AuraStat,
+  CastCountStat,
   FightDetail,
   FightSummary,
   Participant,
@@ -291,4 +294,68 @@ export async function getFightSpells(
   )
   if (!Array.isArray(data)) return []
   return data.map(normalizeSpellStat)
+}
+
+export function normalizeAuraStat(raw: unknown): AuraStat {
+  const o = isObject(raw) ? raw : {}
+  return {
+    spellId: asNumber(pick(o, 'spellId', 'spell_id')),
+    spellName: asString(pick(o, 'spellName', 'spell_name'), 'Unknown'),
+    school: asNumber(pick(o, 'school', 'school')),
+    applications: asNumber(pick(o, 'applications', 'applications')),
+    refreshes: asNumber(pick(o, 'refreshes', 'refreshes')),
+    targets: asNumber(pick(o, 'targets', 'targets')),
+    uptimeMs: asNumber(pick(o, 'uptimeMs', 'uptime_ms')),
+    uptimePct: asNumber(pick(o, 'uptimePct', 'uptime_pct')),
+  }
+}
+
+export function normalizeCastCountStat(raw: unknown): CastCountStat {
+  const o = isObject(raw) ? raw : {}
+  return {
+    actorId: asString(pick(o, 'actorId', 'actor_id')),
+    actorName: asString(pick(o, 'actorName', 'actor_name'), 'Unknown'),
+    class: asPlayerClass(pick(o, 'class', 'class')),
+    spec: asPlayerSpec(pick(o, 'spec', 'spec')),
+    spellId: asNumber(pick(o, 'spellId', 'spell_id')),
+    spellName: asString(pick(o, 'spellName', 'spell_name'), 'Unknown'),
+    extraSpellId: asNumber(pick(o, 'extraSpellId', 'extra_spell_id')),
+    extraSpellName: asString(
+      pick(o, 'extraSpellName', 'extra_spell_name'),
+      '',
+    ),
+    count: asNumber(pick(o, 'count', 'count')),
+  }
+}
+
+export async function getFightAuras(
+  fightId: string,
+  kind: AuraKind,
+): Promise<AuraStat[]> {
+  const qs = new URLSearchParams({ kind })
+  const data = await request(
+    `/api/fights/${encodeURIComponent(fightId)}/auras?${qs}`,
+  )
+  if (!Array.isArray(data)) return []
+  return data.map(normalizeAuraStat)
+}
+
+export async function getFightInterrupts(
+  fightId: string,
+): Promise<CastCountStat[]> {
+  const data = await request(
+    `/api/fights/${encodeURIComponent(fightId)}/interrupts`,
+  )
+  if (!Array.isArray(data)) return []
+  return data.map(normalizeCastCountStat)
+}
+
+export async function getFightDispels(
+  fightId: string,
+): Promise<CastCountStat[]> {
+  const data = await request(
+    `/api/fights/${encodeURIComponent(fightId)}/dispels`,
+  )
+  if (!Array.isArray(data)) return []
+  return data.map(normalizeCastCountStat)
 }
