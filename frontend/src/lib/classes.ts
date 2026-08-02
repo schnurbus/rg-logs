@@ -48,6 +48,25 @@ export function classColor(cls?: PlayerClass | null): string {
   return CLASS_COLORS[cls]
 }
 
+/** Hex colors for charts (SVG cannot resolve CSS variables reliably). */
+export const CLASS_COLOR_HEX: Record<PlayerClass, string> = {
+  deathknight: '#c41e3a',
+  druid: '#ff7c0a',
+  hunter: '#aad372',
+  mage: '#3fc7eb',
+  paladin: '#f48cba',
+  priest: '#ffffff',
+  rogue: '#fff468',
+  shaman: '#0070dd',
+  warlock: '#8788ee',
+  warrior: '#c69b6d',
+}
+
+export function classColorHex(cls?: PlayerClass | null): string {
+  if (!cls) return '#94a3b8'
+  return CLASS_COLOR_HEX[cls]
+}
+
 /** Tailwind-safe inline style helpers for class-tinted text/bars. */
 export function classTextStyle(cls?: PlayerClass | null): { color: string } {
   return { color: classColor(cls) }

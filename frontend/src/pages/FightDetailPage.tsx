@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { ApiError, getFight, getFightAuras, getFightDispels, getFightInterrupts, getFightSpells } from '../api/client'
+import { useParams } from 'react-router-dom'
+import {
+  ApiError,
+  getFight,
+  getFightAuras,
+  getFightDispels,
+  getFightInterrupts,
+  getFightSpells,
+  getFightTimelinePlayers,
+  getFightTimelineSummary,
+} from '../api/client'
 import { AuraTable } from '../components/AuraTable'
 import { CastCountTable } from '../components/CastCountTable'
 import { ErrorMessage, Loading } from '../components/ErrorMessage'
+import { FightHeader } from '../components/FightHeader'
+import { FightPlayerTimelineChart } from '../components/FightPlayerTimelineChart'
+import { FightTimelineChart } from '../components/FightTimelineChart'
 import { MeterBar } from '../components/MeterBar'
 import { RaidComposition } from '../components/RaidComposition'
 import { SpecIcon } from '../components/SpecIcon'
@@ -14,7 +26,6 @@ import {
   type PlayerClass,
 } from '../lib/classes'
 import {
-  formatDuration,
   formatNumber,
   formatPercent,
   formatRate,
@@ -26,6 +37,8 @@ import type {
   FightDetail,
   Participant,
   SpellStat,
+  TimelinePlayers,
+  TimelineSummary,
 } from '../types/api'
 
 type FightTab =
@@ -389,6 +402,21 @@ export function FightDetailPage() {
   const [castError, setCastError] = useState<string | null>(null)
   const [castLoading, setCastLoading] = useState(false)
 
+  const [summaryTimeline, setSummaryTimeline] =
+    useState<TimelineSummary | null>(null)
+  const [summaryTimelineError, setSummaryTimelineError] = useState<
+    string | null
+  >(null)
+  const [summaryTimelineLoading, setSummaryTimelineLoading] = useState(false)
+
+  const [playerTimeline, setPlayerTimeline] = useState<TimelinePlayers | null>(
+    null,
+  )
+  const [playerTimelineError, setPlayerTimelineError] = useState<string | null>(
+    null,
+  )
+  const [playerTimelineLoading, setPlayerTimelineLoading] = useState(false)
+
   const load = useCallback(async () => {
     if (!fightId) return
     try {
@@ -482,6 +510,64 @@ export function FightDetailPage() {
     }
   }, [fightId, tab])
 
+  useEffect(() => {
+    if (!fightId || tab !== 'summary') return
+    let cancelled = false
+    setSummaryTimeline(null)
+    setSummaryTimelineError(null)
+    setSummaryTimelineLoading(true)
+    void (async () => {
+      try {
+        const data = await getFightTimelineSummary(fightId)
+        if (!cancelled) setSummaryTimeline(data)
+      } catch (err) {
+        if (!cancelled) {
+          setSummaryTimelineError(
+            err instanceof ApiError
+              ? `Timeline nicht geladen (${err.status})`
+              : err instanceof Error
+                ? err.message
+                : 'Unbekannter Fehler',
+          )
+        }
+      } finally {
+        if (!cancelled) setSummaryTimelineLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [fightId, tab])
+
+  useEffect(() => {
+    if (!fightId || !isMeterTab(tab)) return
+    let cancelled = false
+    setPlayerTimeline(null)
+    setPlayerTimelineError(null)
+    setPlayerTimelineLoading(true)
+    void (async () => {
+      try {
+        const data = await getFightTimelinePlayers(fightId, tab)
+        if (!cancelled) setPlayerTimeline(data)
+      } catch (err) {
+        if (!cancelled) {
+          setPlayerTimelineError(
+            err instanceof ApiError
+              ? `Timeline nicht geladen (${err.status})`
+              : err instanceof Error
+                ? err.message
+                : 'Unbekannter Fehler',
+          )
+        }
+      } finally {
+        if (!cancelled) setPlayerTimelineLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [fightId, tab])
+
   const allRows = useMemo(() => {
     if (!fight) return []
     return buildMeterRows(fight.participants, fight.durationMs)
@@ -545,31 +631,7 @@ export function FightDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-xs text-text-muted">
-          {fight.uploadId ? (
-            <>
-              <Link to={`/uploads/${fight.uploadId}`}>Upload</Link>
-              <span className="mx-1.5">/</span>
-            </>
-          ) : (
-            <>
-              <Link to="/uploads">Uploads</Link>
-              <span className="mx-1.5">/</span>
-            </>
-          )}
-          <span className="text-text">{fight.title}</span>
-        </p>
-        <h1 className="mt-2 text-xl font-semibold tracking-tight">
-          {fight.title || 'Fight'}
-        </h1>
-        <p className="mt-1 text-sm text-text-muted">
-          Dauer {formatDuration(fight.durationMs)}
-          {fight.kill ? ' · Kill' : ''}
-          {' · '}
-          {fight.participantCount} Teilnehmer
-        </p>
-      </div>
+      <FightHeader fight={fight} view="analyze" />
 
       <div
         role="tablist"
@@ -596,6 +658,15 @@ export function FightDetailPage() {
 
       {tab === 'summary' ? (
         <div className="space-y-4">
+          {summaryTimelineLoading ? <Loading label="Timeline laden…" /> : null}
+          {summaryTimelineError ? (
+            <ErrorMessage message={summaryTimelineError} />
+          ) : null}
+          {!summaryTimelineLoading &&
+          !summaryTimelineError &&
+          summaryTimeline ? (
+            <FightTimelineChart data={summaryTimeline} />
+          ) : null}
           <RaidComposition players={fight.participants} />
           <div className="grid gap-4 lg:grid-cols-2">
             <CompactMeterTable
@@ -616,6 +687,24 @@ export function FightDetailPage() {
 
       {isMeterTab(tab) ? (
         <>
+          {playerTimelineLoading ? <Loading label="Timeline laden…" /> : null}
+          {playerTimelineError ? (
+            <ErrorMessage message={playerTimelineError} />
+          ) : null}
+          {!playerTimelineLoading &&
+          !playerTimelineError &&
+          playerTimeline ? (
+            <FightPlayerTimelineChart
+              data={playerTimeline}
+              title={
+                tab === 'damage'
+                  ? 'Schaden über Zeit'
+                  : tab === 'healing'
+                    ? 'Heilung über Zeit'
+                    : 'Erlittener Schaden über Zeit'
+              }
+            />
+          ) : null}
           <FullMeterTable
             metric={tab}
             rows={meterRows}

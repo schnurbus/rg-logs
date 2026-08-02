@@ -61,6 +61,8 @@ func NewRouter(h *Handler) *fiber.App {
 	authed.Get("/fights/:id/auras", h.GetFightAuras)
 	authed.Get("/fights/:id/interrupts", h.GetFightInterrupts)
 	authed.Get("/fights/:id/dispels", h.GetFightDispels)
+	authed.Get("/fights/:id/timeline", h.GetFightTimeline)
+	authed.Get("/fights/:id/events", h.GetFightEvents)
 
 	write := app.Group("/api", RequireAuth(h.Auth))
 	write.Post("/uploads", h.CreateUpload)
@@ -415,6 +417,74 @@ func (h *Handler) GetFightDispels(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	return c.JSON(stats)
+}
+
+func (h *Handler) GetFightTimeline(c fiber.Ctx) error {
+	fightID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid fight id")
+	}
+	if err := h.ensureFightAccess(c, fightID); err != nil {
+		return err
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(c.Query("mode", "summary")))
+	bucketMs, _ := strconv.Atoi(c.Query("bucketMs", "0"))
+
+	switch mode {
+	case "summary":
+		out, err := h.Store.GetTimelineSummary(c.Context(), fightID, bucketMs)
+		if err != nil {
+			if db.IsNoRows(err) {
+				return fiber.NewError(fiber.StatusNotFound, "fight not found")
+			}
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(out)
+	case "damage", "healing", "taken":
+		out, err := h.Store.GetTimelinePlayers(c.Context(), fightID, db.TimelineMode(mode), bucketMs)
+		if err != nil {
+			if db.IsNoRows(err) {
+				return fiber.NewError(fiber.StatusNotFound, "fight not found")
+			}
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(out)
+	default:
+		return fiber.NewError(fiber.StatusBadRequest, "mode must be summary, damage, healing, or taken")
+	}
+}
+
+func (h *Handler) GetFightEvents(c fiber.Ctx) error {
+	fightID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid fight id")
+	}
+	if err := h.ensureFightAccess(c, fightID); err != nil {
+		return err
+	}
+
+	limit, _ := strconv.Atoi(c.Query("limit", "100"))
+	offset, _ := strconv.Atoi(c.Query("offset", "0"))
+	typeFilter := strings.ToLower(strings.TrimSpace(c.Query("type", "")))
+
+	var actorID *uuid.UUID
+	if actorStr := c.Query("actorId"); actorStr != "" {
+		id, err := uuid.Parse(actorStr)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid actorId")
+		}
+		actorID = &id
+	}
+
+	out, err := h.Store.ListCombatEvents(c.Context(), fightID, limit, offset, typeFilter, actorID)
+	if err != nil {
+		if db.IsNoRows(err) {
+			return fiber.NewError(fiber.StatusNotFound, "fight not found")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(out)
 }
 
 func (h *Handler) ensureFightAccess(c fiber.Ctx, fightID uuid.UUID) error {

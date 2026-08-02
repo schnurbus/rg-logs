@@ -2,10 +2,19 @@ import type {
   AuraKind,
   AuraStat,
   CastCountStat,
+  CombatEventList,
+  CombatEventRow,
+  CombatEventTypeFilter,
   FightDetail,
   FightSummary,
   Participant,
   SpellStat,
+  TimelineMode,
+  TimelinePlayers,
+  TimelinePlayerSeries,
+  TimelineSeriesPoint,
+  TimelineSummary,
+  TimelineSummaryPoint,
   Upload,
   UploadStatus,
 } from '../types/api'
@@ -358,4 +367,146 @@ export async function getFightDispels(
   )
   if (!Array.isArray(data)) return []
   return data.map(normalizeCastCountStat)
+}
+
+export function normalizeTimelineSummary(raw: unknown): TimelineSummary {
+  const o = isObject(raw) ? raw : {}
+  const pointsRaw = pick<unknown>(o, 'points', 'points')
+  const points: TimelineSummaryPoint[] = Array.isArray(pointsRaw)
+    ? pointsRaw.map((p) => {
+        const po = isObject(p) ? p : {}
+        return {
+          t: asNumber(pick(po, 't', 't')),
+          damage: asNumber(pick(po, 'damage', 'damage')),
+          healing: asNumber(pick(po, 'healing', 'healing')),
+          taken: asNumber(pick(po, 'taken', 'taken')),
+        }
+      })
+    : []
+  return {
+    bucketMs: asNumber(pick(o, 'bucketMs', 'bucket_ms'), 1000),
+    points,
+  }
+}
+
+export function normalizeTimelinePlayers(raw: unknown): TimelinePlayers {
+  const o = isObject(raw) ? raw : {}
+  const seriesRaw = pick<unknown>(o, 'series', 'series')
+  const series: TimelinePlayerSeries[] = Array.isArray(seriesRaw)
+    ? seriesRaw.map((s) => {
+        const so = isObject(s) ? s : {}
+        const ptsRaw = pick<unknown>(so, 'points', 'points')
+        const points: TimelineSeriesPoint[] = Array.isArray(ptsRaw)
+          ? ptsRaw.map((p) => {
+              const po = isObject(p) ? p : {}
+              return {
+                t: asNumber(pick(po, 't', 't')),
+                amount: asNumber(pick(po, 'amount', 'amount')),
+              }
+            })
+          : []
+        return {
+          actorId: asString(pick(so, 'actorId', 'actor_id')),
+          name: asString(pick(so, 'name', 'name'), 'Unknown'),
+          class: asPlayerClass(pick(so, 'class', 'class')),
+          points,
+          total: asNumber(pick(so, 'total', 'total')),
+        }
+      })
+    : []
+  return {
+    bucketMs: asNumber(pick(o, 'bucketMs', 'bucket_ms'), 1000),
+    series,
+  }
+}
+
+export async function getFightTimelineSummary(
+  fightId: string,
+): Promise<TimelineSummary> {
+  const qs = new URLSearchParams({ mode: 'summary' })
+  const data = await request(
+    `/api/fights/${encodeURIComponent(fightId)}/timeline?${qs}`,
+  )
+  return normalizeTimelineSummary(data)
+}
+
+export async function getFightTimelinePlayers(
+  fightId: string,
+  mode: Exclude<TimelineMode, 'summary'>,
+): Promise<TimelinePlayers> {
+  const qs = new URLSearchParams({ mode })
+  const data = await request(
+    `/api/fights/${encodeURIComponent(fightId)}/timeline?${qs}`,
+  )
+  return normalizeTimelinePlayers(data)
+}
+
+export function normalizeCombatEventRow(raw: unknown): CombatEventRow {
+  const o = isObject(raw) ? raw : {}
+  const sourceId = pick<unknown>(o, 'sourceId', 'source_id')
+  const targetId = pick<unknown>(o, 'targetId', 'target_id')
+  const missType = pick<unknown>(o, 'missType', 'miss_type')
+  return {
+    id: asNumber(pick(o, 'id', 'id')),
+    offsetMs: asNumber(pick(o, 'offsetMs', 'offset_ms')),
+    eventType: asNumber(pick(o, 'eventType', 'event_type')),
+    sourceId:
+      sourceId != null && asString(sourceId) !== ''
+        ? asString(sourceId)
+        : undefined,
+    sourceName: asString(pick(o, 'sourceName', 'source_name')) || undefined,
+    sourceClass: asPlayerClass(pick(o, 'sourceClass', 'source_class')),
+    sourceSpec: asPlayerSpec(pick(o, 'sourceSpec', 'source_spec')),
+    targetId:
+      targetId != null && asString(targetId) !== ''
+        ? asString(targetId)
+        : undefined,
+    targetName: asString(pick(o, 'targetName', 'target_name')) || undefined,
+    targetClass: asPlayerClass(pick(o, 'targetClass', 'target_class')),
+    targetSpec: asPlayerSpec(pick(o, 'targetSpec', 'target_spec')),
+    spellId: asNumber(pick(o, 'spellId', 'spell_id')),
+    spellName: asString(pick(o, 'spellName', 'spell_name')) || undefined,
+    amount: asNumber(pick(o, 'amount', 'amount')),
+    overkill: asNumber(pick(o, 'overkill', 'overkill')),
+    overheal: asNumber(pick(o, 'overheal', 'overheal')),
+    absorbed: asNumber(pick(o, 'absorbed', 'absorbed')),
+    flags: asNumber(pick(o, 'flags', 'flags')),
+    missType:
+      missType != null && asString(missType) !== ''
+        ? asNumber(missType)
+        : undefined,
+    extra: asNumber(pick(o, 'extra', 'extra')),
+    extraSpellName:
+      asString(pick(o, 'extraSpellName', 'extra_spell_name')) || undefined,
+  }
+}
+
+export async function getFightEvents(
+  fightId: string,
+  opts: {
+    limit?: number
+    offset?: number
+    type?: CombatEventTypeFilter
+    actorId?: string
+  } = {},
+): Promise<CombatEventList> {
+  const qs = new URLSearchParams()
+  if (opts.limit != null) qs.set('limit', String(opts.limit))
+  if (opts.offset != null) qs.set('offset', String(opts.offset))
+  if (opts.type) qs.set('type', opts.type)
+  if (opts.actorId) qs.set('actorId', opts.actorId)
+  const q = qs.toString()
+  const data = await request(
+    `/api/fights/${encodeURIComponent(fightId)}/events${q ? `?${q}` : ''}`,
+  )
+  const o = isObject(data) ? data : {}
+  const eventsRaw = pick<unknown>(o, 'events', 'events')
+  return {
+    total: asNumber(pick(o, 'total', 'total')),
+    limit: asNumber(pick(o, 'limit', 'limit'), opts.limit ?? 100),
+    offset: asNumber(pick(o, 'offset', 'offset'), opts.offset ?? 0),
+    events: Array.isArray(eventsRaw)
+      ? eventsRaw.map(normalizeCombatEventRow)
+      : [],
+  }
 }

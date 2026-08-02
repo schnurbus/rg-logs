@@ -15,6 +15,8 @@
  *   GET  /api/fights/:id/auras?kind=buff|debuff → AuraStat[]
  *   GET  /api/fights/:id/interrupts → CastCountStat[]
  *   GET  /api/fights/:id/dispels → CastCountStat[]
+ *   GET  /api/fights/:id/timeline?mode=summary|damage|healing|taken → Timeline
+ *   GET  /api/fights/:id/events → CombatEventList
  *   GET  /api/health
  */
 
@@ -127,4 +129,78 @@ export interface CastCountStat {
   extraSpellId: number
   extraSpellName: string
   count: number
+}
+
+export type TimelineMode = 'summary' | 'damage' | 'healing' | 'taken'
+
+export interface TimelineSummaryPoint {
+  t: number
+  damage: number
+  healing: number
+  taken: number
+}
+
+export interface TimelineSummary {
+  bucketMs: number
+  points: TimelineSummaryPoint[]
+}
+
+export interface TimelineSeriesPoint {
+  t: number
+  amount: number
+}
+
+export interface TimelinePlayerSeries {
+  actorId: string
+  name: string
+  class?: string
+  points: TimelineSeriesPoint[]
+  total: number
+}
+
+export interface TimelinePlayers {
+  bucketMs: number
+  series: TimelinePlayerSeries[]
+}
+
+export type CombatEventTypeFilter =
+  | ''
+  | 'damage'
+  | 'heal'
+  | 'miss'
+  | 'death'
+  | 'summon'
+  | 'aura'
+  | 'interrupt'
+  | 'dispel'
+
+export interface CombatEventRow {
+  id: number
+  offsetMs: number
+  eventType: number
+  sourceId?: string
+  sourceName?: string
+  sourceClass?: string
+  sourceSpec?: string
+  targetId?: string
+  targetName?: string
+  targetClass?: string
+  targetSpec?: string
+  spellId: number
+  spellName?: string
+  amount: number
+  overkill: number
+  overheal: number
+  absorbed: number
+  flags: number
+  missType?: number
+  extra: number
+  extraSpellName?: string
+}
+
+export interface CombatEventList {
+  total: number
+  limit: number
+  offset: number
+  events: CombatEventRow[]
 }
