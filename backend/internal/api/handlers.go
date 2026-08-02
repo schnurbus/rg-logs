@@ -430,10 +430,11 @@ func (h *Handler) GetFightTimeline(c fiber.Ctx) error {
 
 	mode := strings.ToLower(strings.TrimSpace(c.Query("mode", "summary")))
 	bucketMs, _ := strconv.Atoi(c.Query("bucketMs", "0"))
+	side := db.ParseTimelineSide(c.Query("side", "players"))
 
 	switch mode {
 	case "summary":
-		out, err := h.Store.GetTimelineSummary(c.Context(), fightID, bucketMs)
+		out, err := h.Store.GetTimelineSummary(c.Context(), fightID, bucketMs, side)
 		if err != nil {
 			if db.IsNoRows(err) {
 				return fiber.NewError(fiber.StatusNotFound, "fight not found")
@@ -442,7 +443,7 @@ func (h *Handler) GetFightTimeline(c fiber.Ctx) error {
 		}
 		return c.JSON(out)
 	case "damage", "healing", "taken":
-		out, err := h.Store.GetTimelinePlayers(c.Context(), fightID, db.TimelineMode(mode), bucketMs)
+		out, err := h.Store.GetTimelinePlayers(c.Context(), fightID, db.TimelineMode(mode), bucketMs, side)
 		if err != nil {
 			if db.IsNoRows(err) {
 				return fiber.NewError(fiber.StatusNotFound, "fight not found")

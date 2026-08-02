@@ -420,10 +420,13 @@ export function normalizeTimelinePlayers(raw: unknown): TimelinePlayers {
   }
 }
 
+export type TimelineSide = 'players' | 'enemies'
+
 export async function getFightTimelineSummary(
   fightId: string,
+  side: TimelineSide = 'players',
 ): Promise<TimelineSummary> {
-  const qs = new URLSearchParams({ mode: 'summary' })
+  const qs = new URLSearchParams({ mode: 'summary', side })
   const data = await request(
     `/api/fights/${encodeURIComponent(fightId)}/timeline?${qs}`,
   )
@@ -433,8 +436,9 @@ export async function getFightTimelineSummary(
 export async function getFightTimelinePlayers(
   fightId: string,
   mode: Exclude<TimelineMode, 'summary'>,
+  side: TimelineSide = 'players',
 ): Promise<TimelinePlayers> {
-  const qs = new URLSearchParams({ mode })
+  const qs = new URLSearchParams({ mode, side })
   const data = await request(
     `/api/fights/${encodeURIComponent(fightId)}/timeline?${qs}`,
   )

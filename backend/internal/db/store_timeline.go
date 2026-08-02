@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -21,6 +22,41 @@ const (
 	TimelineModeHealing TimelineMode = "healing"
 	TimelineModeTaken   TimelineMode = "taken"
 )
+
+// TimelineSide selects player raid or enemy NPC series.
+type TimelineSide string
+
+const (
+	TimelineSidePlayers TimelineSide = "players"
+	TimelineSideEnemies TimelineSide = "enemies"
+)
+
+// ParseTimelineSide returns players/enemies; unknown values default to players.
+func ParseTimelineSide(s string) TimelineSide {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "enemies", "enemy", "npcs", "npc":
+		return TimelineSideEnemies
+	default:
+		return TimelineSidePlayers
+	}
+}
+
+// Enemy actor: not a player and not owned by a player (raid pets excluded).
+const sqlIsEnemyActor = `
+	%[1]s.is_player = FALSE
+	AND (
+		%[1]s.owner_guid IS NULL
+		OR NOT EXISTS (
+			SELECT 1 FROM actors o
+			WHERE o.upload_id = %[1]s.upload_id
+			  AND o.guid = %[1]s.owner_guid
+			  AND o.is_player
+		)
+	)`
+
+func enemyActorSQL(alias string) string {
+	return fmt.Sprintf(sqlIsEnemyActor, alias)
+}
 
 // TimelineSummaryPoint is one bucket of raid-wide damage/healing/taken.
 type TimelineSummaryPoint struct {
@@ -99,7 +135,7 @@ func bucketCount(durationMs int64, bucketMs int) int {
 }
 
 // GetTimelineSummary returns raid-wide damage/healing/taken per time bucket.
-func (s *Store) GetTimelineSummary(ctx context.Context, fightID uuid.UUID, bucketMs int) (*TimelineSummary, error) {
+func (s *Store) GetTimelineSummary(ctx context.Context, fightID uuid.UUID, bucketMs int, side TimelineSide) (*TimelineSummary, error) {
 	fight, err := s.GetFight(ctx, fightID)
 	if err != nil {
 		return nil, err
@@ -111,16 +147,46 @@ func (s *Store) GetTimelineSummary(ctx context.Context, fightID uuid.UUID, bucke
 		points[i].T = i * bucketMs
 	}
 
-	rows, err := s.Pool.Query(ctx, `
-		SELECT (e.offset_ms / $2) * $2 AS t,
-		       SUM(CASE WHEN e.event_type = $3 THEN e.amount ELSE 0 END)::bigint,
-		       SUM(CASE WHEN e.event_type = $4 THEN e.amount ELSE 0 END)::bigint
-		FROM combat_events e
-		WHERE e.fight_id = $1
-		  AND e.event_type IN ($3, $4)
-		GROUP BY 1`,
-		fightID, bucketMs, parser.EventDamage, parser.EventHeal,
-	)
+	var dmgHealQuery string
+	var takenQuery string
+	if side == TimelineSideEnemies {
+		dmgHealQuery = `
+			SELECT (e.offset_ms / $2) * $2 AS t,
+			       SUM(CASE WHEN e.event_type = $3 THEN e.amount ELSE 0 END)::bigint,
+			       SUM(CASE WHEN e.event_type = $4 THEN e.amount ELSE 0 END)::bigint
+			FROM combat_events e
+			JOIN actors src ON src.id = e.source_actor_id
+			WHERE e.fight_id = $1
+			  AND e.event_type IN ($3, $4)
+			  AND ` + enemyActorSQL("src") + `
+			GROUP BY 1`
+		takenQuery = `
+			SELECT (e.offset_ms / $2) * $2 AS t, SUM(e.amount)::bigint
+			FROM combat_events e
+			JOIN actors tgt ON tgt.id = e.target_actor_id
+			WHERE e.fight_id = $1
+			  AND e.event_type = $3
+			  AND ` + enemyActorSQL("tgt") + `
+			GROUP BY 1`
+	} else {
+		dmgHealQuery = `
+			SELECT (e.offset_ms / $2) * $2 AS t,
+			       SUM(CASE WHEN e.event_type = $3 THEN e.amount ELSE 0 END)::bigint,
+			       SUM(CASE WHEN e.event_type = $4 THEN e.amount ELSE 0 END)::bigint
+			FROM combat_events e
+			WHERE e.fight_id = $1
+			  AND e.event_type IN ($3, $4)
+			GROUP BY 1`
+		takenQuery = `
+			SELECT (e.offset_ms / $2) * $2 AS t, SUM(e.amount)::bigint
+			FROM combat_events e
+			JOIN actors a ON a.id = e.target_actor_id AND a.is_player
+			WHERE e.fight_id = $1
+			  AND e.event_type = $3
+			GROUP BY 1`
+	}
+
+	rows, err := s.Pool.Query(ctx, dmgHealQuery, fightID, bucketMs, parser.EventDamage, parser.EventHeal)
 	if err != nil {
 		return nil, err
 	}
@@ -141,15 +207,7 @@ func (s *Store) GetTimelineSummary(ctx context.Context, fightID uuid.UUID, bucke
 		return nil, err
 	}
 
-	takenRows, err := s.Pool.Query(ctx, `
-		SELECT (e.offset_ms / $2) * $2 AS t, SUM(e.amount)::bigint
-		FROM combat_events e
-		JOIN actors a ON a.id = e.target_actor_id AND a.is_player
-		WHERE e.fight_id = $1
-		  AND e.event_type = $3
-		GROUP BY 1`,
-		fightID, bucketMs, parser.EventDamage,
-	)
+	takenRows, err := s.Pool.Query(ctx, takenQuery, fightID, bucketMs, parser.EventDamage)
 	if err != nil {
 		return nil, err
 	}
@@ -172,8 +230,8 @@ func (s *Store) GetTimelineSummary(ctx context.Context, fightID uuid.UUID, bucke
 	return &TimelineSummary{BucketMs: bucketMs, Points: points}, nil
 }
 
-// GetTimelinePlayers returns top player series for damage, healing, or taken.
-func (s *Store) GetTimelinePlayers(ctx context.Context, fightID uuid.UUID, mode TimelineMode, bucketMs int) (*TimelinePlayers, error) {
+// GetTimelinePlayers returns top actor series for damage, healing, or taken.
+func (s *Store) GetTimelinePlayers(ctx context.Context, fightID uuid.UUID, mode TimelineMode, bucketMs int, side TimelineSide) (*TimelinePlayers, error) {
 	fight, err := s.GetFight(ctx, fightID)
 	if err != nil {
 		return nil, err
@@ -193,28 +251,45 @@ func (s *Store) GetTimelinePlayers(ctx context.Context, fightID uuid.UUID, mode 
 	})
 
 	var rows pgxRows
-	switch mode {
-	case TimelineModeDamage:
+	eventType := parser.EventDamage
+	if mode == TimelineModeHealing {
+		eventType = parser.EventHeal
+	}
+
+	switch {
+	case side == TimelineSideEnemies && (mode == TimelineModeDamage || mode == TimelineModeHealing):
 		rows, err = s.Pool.Query(ctx, `
 			SELECT
-				CASE WHEN src.is_player THEN src.id ELSE owner.id END AS player_id,
-				CASE WHEN src.is_player THEN src.name ELSE owner.name END AS player_name,
-				CASE WHEN src.is_player THEN src.class ELSE owner.class END AS player_class,
+				src.id AS actor_id,
+				src.name AS actor_name,
+				src.class AS actor_class,
 				(e.offset_ms / $2) * $2 AS t,
 				SUM(e.amount)::bigint
 			FROM combat_events e
 			JOIN actors src ON src.id = e.source_actor_id
-			LEFT JOIN actors owner
-			  ON owner.upload_id = src.upload_id
-			 AND owner.guid = src.owner_guid
-			 AND owner.is_player
 			WHERE e.fight_id = $1
 			  AND e.event_type = $3
-			  AND (src.is_player OR owner.id IS NOT NULL)
+			  AND `+enemyActorSQL("src")+`
+			GROUP BY 1, 2, 3, 4`,
+			fightID, bucketMs, eventType,
+		)
+	case side == TimelineSideEnemies && mode == TimelineModeTaken:
+		rows, err = s.Pool.Query(ctx, `
+			SELECT
+				tgt.id AS actor_id,
+				tgt.name AS actor_name,
+				tgt.class AS actor_class,
+				(e.offset_ms / $2) * $2 AS t,
+				SUM(e.amount)::bigint
+			FROM combat_events e
+			JOIN actors tgt ON tgt.id = e.target_actor_id
+			WHERE e.fight_id = $1
+			  AND e.event_type = $3
+			  AND `+enemyActorSQL("tgt")+`
 			GROUP BY 1, 2, 3, 4`,
 			fightID, bucketMs, parser.EventDamage,
 		)
-	case TimelineModeHealing:
+	case mode == TimelineModeDamage || mode == TimelineModeHealing:
 		rows, err = s.Pool.Query(ctx, `
 			SELECT
 				CASE WHEN src.is_player THEN src.id ELSE owner.id END AS player_id,
@@ -232,9 +307,9 @@ func (s *Store) GetTimelinePlayers(ctx context.Context, fightID uuid.UUID, mode 
 			  AND e.event_type = $3
 			  AND (src.is_player OR owner.id IS NOT NULL)
 			GROUP BY 1, 2, 3, 4`,
-			fightID, bucketMs, parser.EventHeal,
+			fightID, bucketMs, eventType,
 		)
-	case TimelineModeTaken:
+	case mode == TimelineModeTaken:
 		rows, err = s.Pool.Query(ctx, `
 			SELECT
 				tgt.id AS player_id,

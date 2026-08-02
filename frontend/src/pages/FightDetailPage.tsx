@@ -13,7 +13,7 @@ import {
 import { AuraTable } from '../components/AuraTable'
 import { CastCountTable } from '../components/CastCountTable'
 import { ErrorMessage, Loading } from '../components/ErrorMessage'
-import { FightHeader } from '../components/FightHeader'
+import { FightHeader, type FightSide } from '../components/FightHeader'
 import { FightPlayerTimelineChart } from '../components/FightPlayerTimelineChart'
 import { FightTimelineChart } from '../components/FightTimelineChart'
 import { MeterBar } from '../components/MeterBar'
@@ -116,8 +116,23 @@ function playerClassOf(p: Participant): PlayerClass | undefined {
   return asPlayerClass(p.class)
 }
 
+function ownedByPlayer(
+  p: Participant,
+  participants: Participant[],
+): boolean {
+  if (!p.ownerGuid) return false
+  return participants.some(
+    (o) => o.isPlayer && o.guid === p.ownerGuid,
+  )
+}
+
+/** Enemy = non-player without a player owner (raid pets stay with players). */
+function isEnemy(p: Participant, participants: Participant[]): boolean {
+  return !p.isPlayer && !ownedByPlayer(p, participants)
+}
+
 /** Roll pet damage into player totals. Pets are not listed separately. */
-function buildMeterRows(
+function buildPlayerMeterRows(
   participants: Participant[],
   durationMs: number,
 ): MeterRow[] {
@@ -160,6 +175,37 @@ function buildMeterRows(
   })
 }
 
+/** Enemy rows without pet rollup; each NPC GUID is its own row. */
+function buildEnemyMeterRows(
+  participants: Participant[],
+  durationMs: number,
+): MeterRow[] {
+  const secs = durationMs > 0 ? durationMs / 1000 : 0
+  return participants
+    .filter((p) => isEnemy(p, participants))
+    .map((enemy) => {
+      const totals: Participant = {
+        ...enemy,
+        dps: secs > 0 ? enemy.damageDone / secs : undefined,
+        hps:
+          secs > 0
+            ? Math.max(0, enemy.healingDone - enemy.overheal) / secs
+            : undefined,
+      }
+      return { player: enemy, totals }
+    })
+}
+
+function buildMeterRows(
+  participants: Participant[],
+  durationMs: number,
+  side: FightSide,
+): MeterRow[] {
+  return side === 'enemies'
+    ? buildEnemyMeterRows(participants, durationMs)
+    : buildPlayerMeterRows(participants, durationMs)
+}
+
 function sortedMeterRows(
   allRows: MeterRow[],
   metric: MeterTab,
@@ -176,6 +222,7 @@ type CompactMeterProps = {
   metric: MeterTab
   rows: MeterRow[]
   durationMs: number
+  side: FightSide
 }
 
 function CompactMeterTable({
@@ -183,12 +230,14 @@ function CompactMeterTable({
   metric,
   rows,
   durationMs,
+  side,
 }: CompactMeterProps) {
   const total = rows.reduce((sum, row) => sum + amountFor(row.totals, metric), 0)
   const maxAmount = rows.reduce(
     (max, row) => Math.max(max, amountFor(row.totals, metric)),
     0,
   )
+  const showPlayerChrome = side === 'players'
 
   return (
     <div className="overflow-hidden rounded border border-border">
@@ -213,8 +262,12 @@ function CompactMeterTable({
               const rate = rateFor(row.totals, metric, durationMs)
               const pct = total > 0 ? amount / total : 0
               const barRatio = maxAmount > 0 ? amount / maxAmount : 0
-              const cls = playerClassOf(row.player)
-              const profileURL = risingGodsProfileURL(row.player.name)
+              const cls = showPlayerChrome
+                ? playerClassOf(row.player)
+                : undefined
+              const profileURL = showPlayerChrome
+                ? risingGodsProfileURL(row.player.name)
+                : undefined
 
               return (
                 <tr
@@ -224,21 +277,27 @@ function CompactMeterTable({
                   <td className="px-1 py-1.5">
                     <MeterBar ratio={barRatio} playerClass={cls}>
                       <span className="inline-flex items-center gap-1.5">
-                        <SpecIcon
-                          spec={row.player.spec}
-                          playerClass={row.player.class}
-                          name={row.player.name}
-                        />
-                        <a
-                          href={profileURL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Rising Gods Profil"
-                          className="font-medium hover:underline"
-                          style={classTextStyle(cls)}
-                        >
-                          {row.player.name}
-                        </a>
+                        {showPlayerChrome ? (
+                          <>
+                            <SpecIcon
+                              spec={row.player.spec}
+                              playerClass={row.player.class}
+                              name={row.player.name}
+                            />
+                            <a
+                              href={profileURL}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Rising Gods Profil"
+                              className="font-medium hover:underline"
+                              style={classTextStyle(cls)}
+                            >
+                              {row.player.name}
+                            </a>
+                          </>
+                        ) : (
+                          <span className="font-medium">{row.player.name}</span>
+                        )}
                       </span>
                     </MeterBar>
                   </td>
@@ -277,6 +336,7 @@ type FullMeterProps = {
   durationMs: number
   selected: Participant | null
   onSelect: (p: Participant) => void
+  side: FightSide
 }
 
 function FullMeterTable({
@@ -285,12 +345,14 @@ function FullMeterTable({
   durationMs,
   selected,
   onSelect,
+  side,
 }: FullMeterProps) {
   const total = rows.reduce((sum, row) => sum + amountFor(row.totals, metric), 0)
   const maxAmount = rows.reduce(
     (max, row) => Math.max(max, amountFor(row.totals, metric)),
     0,
   )
+  const showPlayerChrome = side === 'players'
 
   return (
     <div className="overflow-x-auto rounded border border-border">
@@ -313,9 +375,13 @@ function FullMeterTable({
             const rate = rateFor(row.totals, metric, durationMs)
             const pct = total > 0 ? amount / total : 0
             const barRatio = maxAmount > 0 ? amount / maxAmount : 0
-            const cls = playerClassOf(row.player)
+            const cls = showPlayerChrome
+              ? playerClassOf(row.player)
+              : undefined
             const active = selected?.actorId === row.player.actorId
-            const profileURL = risingGodsProfileURL(row.player.name)
+            const profileURL = showPlayerChrome
+              ? risingGodsProfileURL(row.player.name)
+              : undefined
 
             return (
               <tr
@@ -332,27 +398,33 @@ function FullMeterTable({
                 <td className="px-1 py-1.5">
                   <MeterBar ratio={barRatio} playerClass={cls}>
                     <span className="inline-flex items-center gap-1.5">
-                      <SpecIcon
-                        spec={row.player.spec}
-                        playerClass={row.player.class}
-                        name={row.player.name}
-                      />
-                      <a
-                        href={profileURL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="Rising Gods Profil"
-                        onClick={(e) => e.stopPropagation()}
-                        className="font-medium hover:underline"
-                        style={classTextStyle(cls)}
-                      >
-                        {row.player.name}
-                      </a>
+                      {showPlayerChrome ? (
+                        <>
+                          <SpecIcon
+                            spec={row.player.spec}
+                            playerClass={row.player.class}
+                            name={row.player.name}
+                          />
+                          <a
+                            href={profileURL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Rising Gods Profil"
+                            onClick={(e) => e.stopPropagation()}
+                            className="font-medium hover:underline"
+                            style={classTextStyle(cls)}
+                          >
+                            {row.player.name}
+                          </a>
+                        </>
+                      ) : (
+                        <span className="font-medium">{row.player.name}</span>
+                      )}
                     </span>
                   </MeterBar>
                 </td>
                 <td className="px-3 py-2 text-right font-mono text-text-muted">
-                  {row.player.gearScore != null
+                  {showPlayerChrome && row.player.gearScore != null
                     ? formatNumber(row.player.gearScore)
                     : '—'}
                 </td>
@@ -389,6 +461,7 @@ export function FightDetailPage() {
   const [fight, setFight] = useState<FightDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<FightTab>('summary')
+  const [side, setSide] = useState<FightSide>('players')
   const [selected, setSelected] = useState<Participant | null>(null)
   const [spells, setSpells] = useState<SpellStat[] | null>(null)
   const [spellsError, setSpellsError] = useState<string | null>(null)
@@ -518,7 +591,7 @@ export function FightDetailPage() {
     setSummaryTimelineLoading(true)
     void (async () => {
       try {
-        const data = await getFightTimelineSummary(fightId)
+        const data = await getFightTimelineSummary(fightId, side)
         if (!cancelled) setSummaryTimeline(data)
       } catch (err) {
         if (!cancelled) {
@@ -537,7 +610,7 @@ export function FightDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [fightId, tab])
+  }, [fightId, tab, side])
 
   useEffect(() => {
     if (!fightId || !isMeterTab(tab)) return
@@ -547,7 +620,7 @@ export function FightDetailPage() {
     setPlayerTimelineLoading(true)
     void (async () => {
       try {
-        const data = await getFightTimelinePlayers(fightId, tab)
+        const data = await getFightTimelinePlayers(fightId, tab, side)
         if (!cancelled) setPlayerTimeline(data)
       } catch (err) {
         if (!cancelled) {
@@ -566,12 +639,12 @@ export function FightDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [fightId, tab])
+  }, [fightId, tab, side])
 
   const allRows = useMemo(() => {
     if (!fight) return []
-    return buildMeterRows(fight.participants, fight.durationMs)
-  }, [fight])
+    return buildMeterRows(fight.participants, fight.durationMs, side)
+  }, [fight, side])
 
   const meterRows = useMemo(() => {
     if (!isMeterTab(tab)) return []
@@ -631,7 +704,16 @@ export function FightDetailPage() {
 
   return (
     <div className="space-y-6">
-      <FightHeader fight={fight} view="analyze" />
+      <FightHeader
+        fight={fight}
+        view="analyze"
+        side={side}
+        onSideChange={(next) => {
+          setSide(next)
+          setSelected(null)
+          setSpells(null)
+        }}
+      />
 
       <div
         role="tablist"
@@ -674,12 +756,14 @@ export function FightDetailPage() {
               metric="damage"
               rows={damageSummaryRows}
               durationMs={fight.durationMs}
+              side={side}
             />
             <CompactMeterTable
               title="Heilung"
               metric="healing"
               rows={healingSummaryRows}
               durationMs={fight.durationMs}
+              side={side}
             />
           </div>
         </div>
@@ -711,6 +795,7 @@ export function FightDetailPage() {
             durationMs={fight.durationMs}
             selected={selected}
             onSelect={(p) => void openSpells(p)}
+            side={side}
           />
 
           {selected ? (
