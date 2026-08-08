@@ -43,6 +43,7 @@ Ohne Frontend-Build liefert der Server keine SPA (`web/` enthält nur einen Plat
 | `GET` | `/api/fights/:id` | optional | Meta + Participants |
 | `GET` | `/api/fights/:id/spells?actorId=` | optional | Spell-Breakdown |
 | `GET` | `/api/health` | nein | Healthcheck |
+| `GET` | `/api/config` | nein | Öffentliche SPA-Config (`supabaseUrl`, `supabaseAnonKey`) |
 
 CORS Default: `http://localhost:5173` (Vite). Überschreiben via `CORS_ORIGINS` (CSV). Bearer-Token = Supabase Access Token.
 
@@ -60,10 +61,7 @@ Das Root-[`Dockerfile`](../Dockerfile) baut Frontend + Backend in ein Image. Die
 ### Image bauen & starten
 
 ```bash
-docker build \
-  --build-arg VITE_SUPABASE_URL=https://<ref>.supabase.co \
-  --build-arg VITE_SUPABASE_ANON_KEY=<anon> \
-  -t rg-logs .
+docker build -t rg-logs .
 
 docker run --rm -p 8080:8080 \
   -e DATABASE_URL='postgresql://...' \
@@ -73,7 +71,7 @@ docker run --rm -p 8080:8080 \
   rg-logs
 ```
 
-CI pusht nach `ghcr.io/<owner>/rg-logs` (siehe `.github/workflows/docker-publish.yml`). Dafür Repo-Variables/Secrets `VITE_SUPABASE_URL` und `VITE_SUPABASE_ANON_KEY` setzen.
+Die SPA holt `SUPABASE_URL` / `SUPABASE_ANON_KEY` zur Laufzeit über `GET /api/config` — keine Vite-Build-Args nötig. CI pusht nach `ghcr.io/<owner>/rg-logs` (siehe `.github/workflows/docker-publish.yml`).
 
 ## Tests
 

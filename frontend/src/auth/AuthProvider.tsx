@@ -1,4 +1,4 @@
-import { createClient, type Session, type User } from '@supabase/supabase-js'
+import type { Session, User } from '@supabase/supabase-js'
 import {
   createContext,
   useContext,
@@ -8,22 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { setApiAccessToken } from '../api/token'
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as
-  | string
-  | undefined
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn(
-    'VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY missing — auth will not work',
-  )
-}
-
-export const supabase = createClient(
-  supabaseUrl || 'http://127.0.0.1:54321',
-  supabaseAnonKey || 'public-anon-key',
-)
+import { getSupabase } from './supabaseClient'
 
 type AuthState = {
   session: Session | null
@@ -40,6 +25,8 @@ const AuthContext = createContext<AuthState | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
+  const [ready, setReady] = useState(false)
+  const [initError, setInitError] = useState<string | null>(null)
 
   const onAuth = useEffectEvent((next: Session | null) => {
     setSession(next)
@@ -49,17 +36,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true
-    void supabase.auth.getSession().then(({ data }) => {
-      if (active) onAuth(data.session)
-    })
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      onAuth(next)
-    })
+    let unsubscribe: (() => void) | undefined
+
+    void (async () => {
+      try {
+        const supabase = await getSupabase()
+        if (!active) return
+        setReady(true)
+        const { data } = await supabase.auth.getSession()
+        if (active) onAuth(data.session)
+        const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+          onAuth(next)
+        })
+        unsubscribe = () => sub.subscription.unsubscribe()
+      } catch (err) {
+        if (!active) return
+        setInitError(err instanceof Error ? err.message : String(err))
+        setLoading(false)
+      }
+    })()
+
     return () => {
       active = false
-      sub.subscription.unsubscribe()
+      unsubscribe?.()
     }
   }, [])
+
+  if (initError) {
+    return (
+      <div className="mx-auto max-w-lg p-6 text-sm text-danger">
+        Auth-Konfiguration fehlgeschlagen: {initError}
+      </div>
+    )
+  }
+
+  if (!ready) {
+    return <p className="p-6 text-sm text-text-muted">Lade Konfiguration…</p>
+  }
 
   const value: AuthState = {
     session,
@@ -67,6 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loading,
     accessToken: session?.access_token ?? null,
     async signInWithMagicLink(email: string) {
+      const supabase = await getSupabase()
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
@@ -76,6 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error
     },
     async signInWithOAuth(provider) {
+      const supabase = await getSupabase()
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
@@ -85,6 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error
     },
     async signOut() {
+      const supabase = await getSupabase()
       const { error } = await supabase.auth.signOut()
       if (error) throw error
     },

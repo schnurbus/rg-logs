@@ -27,6 +27,9 @@ type Handler struct {
 	Worker  *ingest.Worker
 	Auth    *auth.Client
 	Storage *storage.Client
+	// Public frontend bootstrap (safe to expose; anon key is designed for browsers).
+	SupabaseURL     string
+	SupabaseAnonKey string
 }
 
 // DefaultCORSOrigins allows the Vite dev server during local development.
@@ -64,6 +67,7 @@ func NewRouter(h *Handler, corsOrigins []string) *fiber.App {
 	}))
 
 	app.Get("/api/health", h.Health)
+	app.Get("/api/config", h.PublicConfig)
 
 	authed := app.Group("/api", OptionalAuth(h.Auth))
 	authed.Get("/uploads", h.ListUploads)
@@ -88,6 +92,15 @@ func NewRouter(h *Handler, corsOrigins []string) *fiber.App {
 
 func (h *Handler) Health(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": "ok"})
+}
+
+// PublicConfig returns browser-safe runtime settings so the SPA does not need
+// build-time VITE_SUPABASE_* baked into the Docker image.
+func (h *Handler) PublicConfig(c fiber.Ctx) error {
+	return c.JSON(fiber.Map{
+		"supabaseUrl":     h.SupabaseURL,
+		"supabaseAnonKey": h.SupabaseAnonKey,
+	})
 }
 
 func (h *Handler) CreateUpload(c fiber.Ctx) error {

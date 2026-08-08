@@ -5,16 +5,12 @@ FROM node:22-alpine AS frontend
 
 WORKDIR /app
 
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
-
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend/ ./
-RUN VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
-    VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" \
-    npm run build
+# No VITE_SUPABASE_* at build time — SPA loads /api/config at runtime.
+RUN npm run build
 
 # --- Backend (Go) ------------------------------------------------------------
 FROM golang:1.25-alpine AS backend

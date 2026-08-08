@@ -18,6 +18,7 @@
  *   GET  /api/fights/:id/timeline?mode=summary|damage|healing|taken → Timeline
  *   GET  /api/fights/:id/events → CombatEventList
  *   GET  /api/health
+ *   GET  /api/config              → { supabaseUrl, supabaseAnonKey }
  */
 
 export type UploadStatus = 'pending' | 'processing' | 'ready' | 'failed'

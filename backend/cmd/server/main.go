@@ -45,10 +45,12 @@ func main() {
 	worker.Start(2)
 
 	h := &api.Handler{
-		Store:   store,
-		Worker:  worker,
-		Auth:    authClient,
-		Storage: storageClient,
+		Store:           store,
+		Worker:          worker,
+		Auth:            authClient,
+		Storage:         storageClient,
+		SupabaseURL:     supabaseURL,
+		SupabaseAnonKey: anonKey,
 	}
 	app := api.NewRouter(h, parseCSV(env("CORS_ORIGINS", "")))
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase } from '../auth/AuthProvider'
+import { getSupabase } from '../auth/supabaseClient'
 
 export function AuthCallbackPage() {
   const navigate = useNavigate()
@@ -9,21 +9,26 @@ export function AuthCallbackPage() {
   useEffect(() => {
     let active = true
     void (async () => {
-      const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(
-        window.location.href,
-      )
-      if (!active) return
-      if (exchangeError) {
-        // Hash-based magic links may already be handled by detectSessionInUrl.
-        const { data } = await supabase.auth.getSession()
-        if (data.session) {
-          navigate('/', { replace: true })
+      try {
+        const supabase = await getSupabase()
+        const { error: exchangeError } =
+          await supabase.auth.exchangeCodeForSession(window.location.href)
+        if (!active) return
+        if (exchangeError) {
+          // Hash-based magic links may already be handled by detectSessionInUrl.
+          const { data } = await supabase.auth.getSession()
+          if (data.session) {
+            navigate('/', { replace: true })
+            return
+          }
+          setError(exchangeError.message)
           return
         }
-        setError(exchangeError.message)
-        return
+        navigate('/', { replace: true })
+      } catch (err) {
+        if (!active) return
+        setError(err instanceof Error ? err.message : String(err))
       }
-      navigate('/', { replace: true })
     })()
     return () => {
       active = false
