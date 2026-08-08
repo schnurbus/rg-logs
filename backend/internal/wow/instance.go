@@ -153,14 +153,42 @@ var bossEncounterIDs = map[string]string{
 	"valithria dreamwalker":   encICCValithria,
 }
 
+// IsGunshipEncounter reports whether the NPC belongs to the ICC gunship battle.
+func IsGunshipEncounter(name string) bool {
+	return EncounterID(name) == encICCGunship
+}
+
 // IsHealEncounterBoss reports whether the NPC is the objective of a heal fight
 // (currently Valithria Dreamwalker).
 func IsHealEncounterBoss(name string) bool {
 	return EncounterID(name) == encICCValithria
 }
 
+// DeathEndsEncounter reports whether UNIT_DIED of this NPC should close the fight.
+// Multi-NPC encounters keep going through add/prince deaths until a combat gap,
+// a success spell, or a different encounter engages.
+func DeathEndsEncounter(name string) bool {
+	if !IsKnownBoss(name) {
+		return false
+	}
+	return EncounterID(name) == ""
+}
+
+// UnitDeathCountsAsKill reports whether death of this NPC alone may mark the fight
+// as a kill. Gunship crew deaths are wave progress, not an encounter kill.
+func UnitDeathCountsAsKill(name string) bool {
+	if EncounterID(name) == encICCGunship {
+		return false
+	}
+	return IsKnownBoss(name)
+}
+
 // ValithriaSuccessSpellID is Dreamwalker's Rage — cast when the heal fight succeeds.
 const ValithriaSuccessSpellID = 71189
+
+// GunshipSuccessSpellID is Teleport to Deathbringer's Rise — applied when the
+// gunship battle is won (APPLIED/REMOVED both count; APPLIED is often missing).
+const GunshipSuccessSpellID = 70858
 
 // bossInstances maps normalized EN/DE boss names to display instance names (German).
 var bossInstances = map[string]string{

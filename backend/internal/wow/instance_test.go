@@ -76,3 +76,24 @@ func TestEncounterID(t *testing.T) {
 		t.Fatal("Muradin is gunship")
 	}
 }
+
+func TestGunshipDeathAndKillRules(t *testing.T) {
+	if DeathEndsEncounter("Marinesoldat der Himmelsbrecher") {
+		t.Fatal("gunship add death must not end encounter")
+	}
+	if DeathEndsEncounter("Prinz Valanar") {
+		t.Fatal("blood council death must not end encounter")
+	}
+	if !DeathEndsEncounter("Sindragosa") {
+		t.Fatal("single boss death should end encounter")
+	}
+	if UnitDeathCountsAsKill("Marinesoldat der Himmelsbrecher") {
+		t.Fatal("gunship add death must not count as kill")
+	}
+	if !UnitDeathCountsAsKill("Prinz Valanar") {
+		t.Fatal("blood prince death may count as kill")
+	}
+	if !IsGunshipEncounter("Muradin Bronzebart") {
+		t.Fatal("Muradin should be gunship")
+	}
+}

@@ -323,6 +323,57 @@ func TestParseReferenceLogSmoke(t *testing.T) {
 	}
 }
 
+func TestGunshipAddDeathsDoNotSplitFight(t *testing.T) {
+	// Player damages gunship adds across waves; add UNIT_DIEDs must stay one segment.
+	// Victory is Teleport to Deathbringer's Rise (70858).
+	snippet := strings.Join([]string{
+		`8/2 19:44:21.000  SPELL_DAMAGE,0x000000000080A146,"Annataar",0x40514,0xF130009118000248,"Schütze der Himmelsbrecher",0xa48,48562,"Prankenhieb (Bär)",0x1,2170,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:44:25.000  SPELL_DAMAGE,0x000000000080A146,"Annataar",0x40514,0xF130009118000248,"Schütze der Himmelsbrecher",0xa48,48562,"Prankenhieb (Bär)",0x1,2170,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:44:30.000  SPELL_DAMAGE,0x000000000080A146,"Annataar",0x40514,0xF130009118000248,"Schütze der Himmelsbrecher",0xa48,48562,"Prankenhieb (Bär)",0x1,2170,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:44:35.000  SPELL_DAMAGE,0x000000000080A146,"Annataar",0x40514,0xF130009118000248,"Schütze der Himmelsbrecher",0xa48,48562,"Prankenhieb (Bär)",0x1,2170,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:44:40.000  UNIT_DIED,0x0000000000000000,nil,0x80000000,0xF130009118000248,"Schütze der Himmelsbrecher",0xa48`,
+		`8/2 19:44:45.000  SPELL_DAMAGE,0x000000000080A146,"Annataar",0x40514,0xF1300090560001A0,"Marinesoldat der Himmelsbrecher",0xa48,48562,"Prankenhieb (Bär)",0x1,2000,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:44:50.000  SPELL_DAMAGE,0x000000000080A146,"Annataar",0x40514,0xF1300090560001A0,"Marinesoldat der Himmelsbrecher",0xa48,48562,"Prankenhieb (Bär)",0x1,2000,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:44:55.000  SPELL_DAMAGE,0x000000000080A146,"Annataar",0x40514,0xF1300090560001A0,"Marinesoldat der Himmelsbrecher",0xa48,48562,"Prankenhieb (Bär)",0x1,2000,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:45:00.000  UNIT_DIED,0x0000000000000000,nil,0x80000000,0xF1300090560001A0,"Marinesoldat der Himmelsbrecher",0xa48`,
+		// Ambient NPC-vs-NPC must not keep the fight open forever / pollute damage.
+		`8/2 19:45:05.000  SWING_DAMAGE,0xF13000916E000271,"Bastionsfrostwyrm",0xa48,0xF1300090A4000272,"Pirscher der Kor'kron",0xa48,4048,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:45:10.000  SWING_DAMAGE,0xF13000916E000271,"Bastionsfrostwyrm",0xa48,0xF1300090A4000272,"Pirscher der Kor'kron",0xa48,4048,0,1,0,0,0,nil,nil,nil`,
+		// Cannon-phase lull (>45s, <3min) must not split the gunship pull.
+		`8/2 19:46:30.000  SPELL_DAMAGE,0xF150008FE700008D,"Kanone des Hordenkanonenboots",0x1114,0xF130009054000174,"Muradin Bronzebart",0xa48,70173,"Kanonenschuss",0x1,5000,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:46:35.000  SPELL_DAMAGE,0xF150008FE700008D,"Kanone des Hordenkanonenboots",0x1114,0xF130009054000174,"Muradin Bronzebart",0xa48,70173,"Kanonenschuss",0x1,5000,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:46:40.000  SPELL_DAMAGE,0x000000000080A146,"Annataar",0x40514,0xF130009054000174,"Muradin Bronzebart",0xa48,48562,"Prankenhieb (Bär)",0x1,5000,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:46:45.000  SPELL_DAMAGE,0x000000000080A146,"Annataar",0x40514,0xF130009054000174,"Muradin Bronzebart",0xa48,48562,"Prankenhieb (Bär)",0x1,5000,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:46:50.000  SPELL_DAMAGE,0x000000000080A146,"Annataar",0x40514,0xF130009054000174,"Muradin Bronzebart",0xa48,48562,"Prankenhieb (Bär)",0x1,5000,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:46:55.000  SPELL_AURA_REMOVED,0x00000000008043C6,"Amelix",0x512,0x00000000008043C6,"Amelix",0x512,70858,"Teleport zum Dom des Todesbringers",0x1,BUFF`,
+		// More ambient after victory — must not open a second gunship segment.
+		`8/2 19:47:10.000  SWING_DAMAGE,0xF13000916E000271,"Bastionsfrostwyrm",0xa48,0xF130009118000249,"Beschwörer der Himmelsbrecher",0xa48,4000,0,1,0,0,0,nil,nil,nil`,
+		`8/2 19:48:10.000  SWING_DAMAGE,0xF13000916E000271,"Bastionsfrostwyrm",0xa48,0xF130009118000249,"Beschwörer der Himmelsbrecher",0xa48,4000,0,1,0,0,0,nil,nil,nil`,
+	}, "\n")
+
+	res, err := parser.Parse(strings.NewReader(snippet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gunship []*parser.FightResult
+	for _, f := range res.Fights {
+		if f.Title == "Kanonenschiffsschlacht von der Eiskrone" {
+			gunship = append(gunship, f)
+		}
+	}
+	if len(gunship) != 1 {
+		t.Fatalf("expected 1 gunship fight, got %d (total fights=%d)", len(gunship), len(res.Fights))
+	}
+	f := gunship[0]
+	if !f.Kill {
+		t.Fatal("expected gunship kill via teleport success")
+	}
+	// ~19:44:21 -> 19:46:55
+	if f.DurationMs < 140_000 || f.DurationMs > 170_000 {
+		t.Fatalf("gunship duration=%dms, want ~154s (start to teleport)", f.DurationMs)
+	}
+}
+
 func TestSpellHitDetails(t *testing.T) {
 	snippet := strings.Join([]string{
 		`8/1 08:45:16.653  SWING_DAMAGE,0x00000000002A0928,"Deaklot",0x512,0xF130006C590000BA,"Zombie",0xa48,1000,0,1,0,0,0,nil,nil,nil`,

@@ -14,15 +14,16 @@ import (
 )
 
 const (
-	FightGap       = 45 * time.Second
-	MinFightDur    = 5 * time.Second
-	MinFightEvents = 10
-	FlagPlayer     = 0x400
-	FlagNPC        = 0x800
-	FlagPet        = 0x1000
-	FlagGuardian   = 0x2000
-	SpellMeleeID   = 1
-	SpellMeleeName = "Nahkampf"
+	FightGap          = 45 * time.Second
+	GunshipFightGap   = 3 * time.Minute // cannon/portal lulls between boarding waves
+	MinFightDur       = 5 * time.Second
+	MinFightEvents    = 10
+	FlagPlayer        = 0x400
+	FlagNPC           = 0x800
+	FlagPet           = 0x1000
+	FlagGuardian      = 0x2000
+	SpellMeleeID      = 1
+	SpellMeleeName    = "Nahkampf"
 )
 
 // Spells that prove a player↔pet ownership link when SUMMON is missing
@@ -238,9 +239,19 @@ func (p *Parser) handleLine(line string) error {
 		return nil
 	}
 
+	// Ambient NPC-vs-NPC (gunship ships keep fighting after the raid leaves) must not
+	// open fights, bridge gaps, or pollute boss damage taken / titles.
+	if isPureNPCCombat(event, fields) {
+		return nil
+	}
+
 	hostile := isHostileEngagement(event, fields)
 
-	if p.hasCombat && ts.Sub(p.lastCombat) >= FightGap {
+	gap := FightGap
+	if p.cur != nil && fightHasGunship(p.cur) {
+		gap = GunshipFightGap
+	}
+	if p.hasCombat && ts.Sub(p.lastCombat) >= gap {
 		p.closeFight()
 	}
 
@@ -253,7 +264,9 @@ func (p *Parser) handleLine(line string) error {
 
 	if p.cur == nil {
 		// Friendly heals / OOC ticks must not open a fight.
-		if !hostile {
+		// Orphan UNIT_DIED/PARTY_KILL (e.g. after a boss already closed) must not
+		// open a hollow segment that later absorbs the next pull.
+		if !hostile || event == "UNIT_DIED" || event == "PARTY_KILL" {
 			return nil
 		}
 		p.cur = newFight(ts)
@@ -286,9 +299,12 @@ func (p *Parser) handleLine(line string) error {
 		p.handleHeal(ts, fields, true)
 	case "UNIT_DIED", "PARTY_KILL":
 		p.handleDeath(ts, fields)
-		// End boss encounters on boss death so trailing OOC heals don't inflate duration.
+		// End single-boss encounters on boss death so trailing OOC heals don't inflate duration.
+		// Multi-NPC encounters (gunship, blood council, …) must not close on add/prince deaths.
 		if name := hostileBossName(event, fields); name != "" && p.cur != nil && fightHasKnownBoss(p.cur) {
-			p.closeFight()
+			if wow.DeathEndsEncounter(name) {
+				p.closeFight()
+			}
 		}
 	}
 	return nil
@@ -340,10 +356,10 @@ func (p *Parser) closeFight() {
 
 	f.Title = pickTitle(f)
 	f.Kill = f.EnemyDied[f.Title] || f.EncounterSuccess
-	// Multi-NPC encounters: any constituent boss death / success counts as a kill.
+	// Multi-NPC encounters: constituent boss deaths may count as a kill (not gunship adds).
 	if !f.Kill {
 		for name := range f.EnemyDied {
-			if wow.IsKnownBoss(name) && wow.FightTitle(name) == f.Title {
+			if wow.UnitDeathCountsAsKill(name) && wow.FightTitle(name) == f.Title {
 				f.Kill = true
 				break
 			}
@@ -1016,6 +1032,12 @@ func (p *Parser) handleAura(ts time.Time, fields []string, eventType int16) {
 		Flags:      flags,
 		Extra:      stacks,
 	})
+
+	// Gunship victory: Teleport to Deathbringer's Rise.
+	if spellID == wow.GunshipSuccessSpellID && fightHasGunship(p.cur) {
+		p.cur.EncounterSuccess = true
+		p.closeFight()
+	}
 }
 
 func (p *Parser) handleInterrupt(ts time.Time, fields []string) {
@@ -1116,6 +1138,19 @@ func isHostileEngagement(event string, fields []string) bool {
 	}
 }
 
+// isPureNPCCombat reports damage/miss events where both sides are NPCs (no player).
+func isPureNPCCombat(event string, fields []string) bool {
+	switch event {
+	case "UNIT_DIED", "PARTY_KILL", "SPELL_HEAL", "SPELL_PERIODIC_HEAL":
+		return false
+	default:
+		if len(fields) < 6 {
+			return false
+		}
+		return isNPCFlags(parseFlags(fields[2])) && isNPCFlags(parseFlags(fields[5]))
+	}
+}
+
 func isNPCFlags(flags int64) bool {
 	return (flags&FlagNPC) != 0 && (flags&FlagPlayer) == 0
 }
@@ -1182,6 +1217,20 @@ func fightSharesEncounter(f *FightResult, bossName string) bool {
 	}
 	for name := range f.BossHealingTaken {
 		if wow.EncounterID(name) == enc {
+			return true
+		}
+	}
+	return false
+}
+
+func fightHasGunship(f *FightResult) bool {
+	for name := range f.EnemyDamageTaken {
+		if wow.IsGunshipEncounter(name) {
+			return true
+		}
+	}
+	for name := range f.BossHealingTaken {
+		if wow.IsGunshipEncounter(name) {
 			return true
 		}
 	}
