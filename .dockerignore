@@ -1,0 +1,19 @@
+# Git context for Docker builds (app image; local supabase/uploads stay out).
+.git
+.env
+.env.*
+!.env.example
+**/.DS_Store
+**/node_modules
+frontend/dist
+frontend/.vite
+backend/tmp
+backend/bin
+uploads/**
+!uploads/.gitkeep
+references
+supabase/.temp
+supabase/.branches
+*.md
+!backend/README.md
+!frontend/README.md

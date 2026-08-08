@@ -50,7 +50,7 @@ func main() {
 		Auth:    authClient,
 		Storage: storageClient,
 	}
-	app := api.NewRouter(h)
+	app := api.NewRouter(h, parseCSV(env("CORS_ORIGINS", "")))
 
 	go func() {
 		log.Printf("listening on %s", addr)
@@ -74,6 +74,23 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseCSV splits a comma-separated env value into trimmed non-empty parts.
+// An empty string yields nil (caller uses defaults).
+func parseCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func mustEnv(key string) string {

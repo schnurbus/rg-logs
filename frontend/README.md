@@ -15,6 +15,8 @@ npm run dev
 
 Dev server proxies `/api` → `http://localhost:3000` (Fiber backend).
 
+In Produktion wird dieses Frontend vom Go-Backend (Docker-Image) ausgeliefert — kein separater Vite-Server.
+
 ## Auth
 
 - Magic Link / Google / Discord über Supabase

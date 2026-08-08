@@ -29,7 +29,18 @@ type Handler struct {
 	Storage *storage.Client
 }
 
-func NewRouter(h *Handler) *fiber.App {
+// DefaultCORSOrigins allows the Vite dev server during local development.
+var DefaultCORSOrigins = []string{
+	"http://localhost:5173",
+	"http://127.0.0.1:5173",
+}
+
+func NewRouter(h *Handler, corsOrigins []string) *fiber.App {
+	origins := DefaultCORSOrigins
+	if len(corsOrigins) > 0 {
+		origins = corsOrigins
+	}
+
 	app := fiber.New(fiber.Config{
 		BodyLimit: 100 * 1024 * 1024,
 		ErrorHandler: func(c fiber.Ctx, err error) error {
@@ -44,7 +55,7 @@ func NewRouter(h *Handler) *fiber.App {
 	app.Use(recover.New())
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173"},
+		AllowOrigins: origins,
 		AllowMethods: []string{
 			fiber.MethodGet, fiber.MethodPost, fiber.MethodPatch,
 			fiber.MethodDelete, fiber.MethodOptions,
@@ -69,6 +80,8 @@ func NewRouter(h *Handler) *fiber.App {
 	write.Post("/uploads", h.CreateUpload)
 	write.Patch("/uploads/:id", h.UpdateUpload)
 	write.Delete("/uploads/:id", h.DeleteUpload)
+
+	mountSPA(app)
 
 	return app
 }
