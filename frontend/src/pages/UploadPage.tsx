@@ -83,7 +83,8 @@ export function UploadPage() {
           Combat Log hochladen
         </h1>
         <p className="mt-1 text-sm text-text-muted">
-          WotLK Classic Combat Log (.txt) per Drag-and-Drop oder Dateiauswahl.
+          WotLK Classic Combat Log (.txt oder .zip) per Drag-and-Drop oder
+          Dateiauswahl. ZIP-Archive werden beim Analysieren entpackt.
         </p>
       </div>
 
@@ -112,7 +113,7 @@ export function UploadPage() {
         <input
           ref={inputRef}
           type="file"
-          accept=".txt,text/plain"
+          accept=".txt,.zip,text/plain,application/zip,application/x-zip-compressed"
           className="hidden"
           onChange={(e) => onFile(e.target.files?.[0] ?? null)}
         />
@@ -122,7 +123,9 @@ export function UploadPage() {
             <span className="text-text-muted">({formatBytes(file.size)})</span>
           </p>
         ) : (
-          <p className="mt-4 text-xs text-text-muted">Erwartet: WoWCombatLog.txt</p>
+          <p className="mt-4 text-xs text-text-muted">
+            Erwartet: WoWCombatLog.txt oder .zip
+          </p>
         )}
       </div>
 

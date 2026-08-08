@@ -120,7 +120,7 @@ file_size_limit = "100MiB"
 [storage.buckets.combat-logs]
 public = false
 file_size_limit = "100MiB"
-allowed_mime_types = ["text/plain", "application/octet-stream"]
+allowed_mime_types = ["text/plain", "application/octet-stream", "application/zip", "application/x-zip-compressed"]
 
 # Allow connections via S3 compatible clients
 [storage.s3_protocol]

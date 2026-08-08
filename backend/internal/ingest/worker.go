@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"rg-logs/internal/db"
+	"rg-logs/internal/logarchive"
 	"rg-logs/internal/parser"
 	"rg-logs/internal/storage"
 	"rg-logs/internal/wow"
@@ -107,7 +108,11 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 	}
 	defer rc.Close()
 
-	tmp, err := os.CreateTemp("", "rglogs-*.txt")
+	tmpPattern := "rglogs-*.txt"
+	if strings.HasSuffix(strings.ToLower(path), ".zip") {
+		tmpPattern = "rglogs-*.zip"
+	}
+	tmp, err := os.CreateTemp("", tmpPattern)
 	if err != nil {
 		return fmt.Errorf("temp file: %w", err)
 	}
@@ -122,13 +127,13 @@ func (w *Worker) runParse(ctx context.Context, job Job) error {
 		return fmt.Errorf("close temp: %w", err)
 	}
 
-	f, err := os.Open(tmpPath)
+	logReader, err := logarchive.Open(tmpPath)
 	if err != nil {
-		return fmt.Errorf("reopen temp: %w", err)
+		return fmt.Errorf("open log: %w", err)
 	}
-	defer f.Close()
+	defer logReader.Close()
 
-	result, err := parser.Parse(f)
+	result, err := parser.Parse(logReader)
 	if err != nil {
 		return fmt.Errorf("parse: %w", err)
 	}

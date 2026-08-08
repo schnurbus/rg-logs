@@ -113,7 +113,9 @@ type FightResult struct {
 	Spells           map[spellKey]*SpellAgg
 	Events           []CombatEvent
 	EnemyDamageTaken map[string]int64 // enemy name -> damage taken (for title)
+	BossHealingTaken map[string]int64 // friendly/heal-boss name -> healing taken (Valithria)
 	EnemyDied        map[string]bool
+	EncounterSuccess bool // set by encounter-specific success spells (e.g. Valithria)
 	EventCount       int
 }
 
@@ -242,10 +244,10 @@ func (p *Parser) handleLine(line string) error {
 		p.closeFight()
 	}
 
-	// First engagement of a known boss closes any preceding trash segment.
+	// Engaging a known boss closes trash or a different encounter.
 	if hostile && p.cur != nil {
-		if name := hostileBossName(event, fields); name != "" && !fightHasKnownBoss(p.cur) {
-			p.closeFight()
+		if name := hostileBossName(event, fields); name != "" {
+			p.maybeSplitForBoss(name)
 		}
 	}
 
@@ -301,7 +303,26 @@ func newFight(start time.Time) *FightResult {
 		Spells:           make(map[spellKey]*SpellAgg),
 		Events:           make([]CombatEvent, 0, 256),
 		EnemyDamageTaken: make(map[string]int64),
+		BossHealingTaken: make(map[string]int64),
 		EnemyDied:        make(map[string]bool),
+	}
+}
+
+// maybeSplitForBoss closes the current segment when a new known boss from another
+// encounter (or after trash) appears.
+func (p *Parser) maybeSplitForBoss(bossName string) {
+	if p.cur == nil || bossName == "" {
+		return
+	}
+	if fightHasNPC(p.cur, bossName) {
+		return
+	}
+	if !fightHasKnownBoss(p.cur) {
+		p.closeFight()
+		return
+	}
+	if !fightSharesEncounter(p.cur, bossName) {
+		p.closeFight()
 	}
 }
 
@@ -318,7 +339,16 @@ func (p *Parser) closeFight() {
 	}
 
 	f.Title = pickTitle(f)
-	f.Kill = f.EnemyDied[f.Title]
+	f.Kill = f.EnemyDied[f.Title] || f.EncounterSuccess
+	// Multi-NPC encounters: any constituent boss death / success counts as a kill.
+	if !f.Kill {
+		for name := range f.EnemyDied {
+			if wow.IsKnownBoss(name) && wow.FightTitle(name) == f.Title {
+				f.Kill = true
+				break
+			}
+		}
+	}
 
 	count := 0
 	for guid, agg := range f.Actors {
@@ -336,15 +366,48 @@ func (p *Parser) closeFight() {
 }
 
 func pickTitle(f *FightResult) string {
-	bestName := "Trash"
-	var bestDmg int64
+	var bestAny string
+	var bestAnyDmg int64
+	var bestBoss string
+	var bestBossDmg int64
 	for name, dmg := range f.EnemyDamageTaken {
-		if dmg > bestDmg {
-			bestDmg = dmg
-			bestName = name
+		if dmg > bestAnyDmg {
+			bestAnyDmg = dmg
+			bestAny = name
+		}
+		if wow.IsKnownBoss(name) && dmg > bestBossDmg {
+			bestBossDmg = dmg
+			bestBoss = name
 		}
 	}
-	return bestName
+
+	var bestHealBoss string
+	var bestHeal int64
+	for name, heal := range f.BossHealingTaken {
+		// Only Valithria-style heal encounters may claim the title via healing.
+		if !wow.IsHealEncounterBoss(name) {
+			continue
+		}
+		if heal > bestHeal {
+			bestHeal = heal
+			bestHealBoss = name
+		}
+	}
+	// Heal encounters (Valithria): any meaningful healing onto the boss claims the title.
+	// Late encounter spells can dump huge damage onto portals/adds and must not rename it.
+	const minHealBossClaim int64 = 100000
+	if bestHealBoss != "" && bestHeal >= minHealBossClaim {
+		return wow.FightTitle(bestHealBoss)
+	}
+	// Prefer a known boss only when it took a meaningful share of damage.
+	// Avoid leftover encounter NPCs renaming long trash segments.
+	if bestBoss != "" && bestBossDmg >= bestAnyDmg/4 {
+		return wow.FightTitle(bestBoss)
+	}
+	if bestAny != "" {
+		return bestAny
+	}
+	return "Trash"
 }
 
 func (p *Parser) ensureActor(guid, name string, flags int64) *ActorInfo {
@@ -726,6 +789,11 @@ func (p *Parser) handleSpellDamage(ts time.Time, fields []string, periodic bool)
 		p.cur.EnemyDamageTaken[unquote(dstName)] += amount
 	}
 
+	// Valithria success: Dreamwalker's Rage.
+	if spellID == wow.ValithriaSuccessSpellID && wow.IsKnownBoss(unquote(srcName)) {
+		p.cur.EncounterSuccess = true
+	}
+
 	flags := 0
 	if crit {
 		flags |= EventFlagCrit
@@ -854,6 +922,11 @@ func (p *Parser) handleHeal(ts time.Time, fields []string, periodic bool) {
 	src := p.resolveSource(srcGUID, srcName, srcFlags)
 	p.ensureActor(dstGUID, dstName, dstFlags)
 	p.notePetOwnerLink(spellID, srcGUID, srcFlags, dstGUID, dstFlags)
+
+	dst := unquote(dstName)
+	if p.cur != nil && (dstFlags&FlagPlayer) == 0 && (dstFlags&FlagNPC) != 0 && wow.IsKnownBoss(dst) {
+		p.cur.BossHealingTaken[dst] += amount
+	}
 
 	if agg := p.fightActor(src, ts); agg != nil {
 		agg.HealingDone += amount
@@ -1075,6 +1148,40 @@ func hostileBossName(event string, fields []string) string {
 func fightHasKnownBoss(f *FightResult) bool {
 	for name := range f.EnemyDamageTaken {
 		if wow.IsKnownBoss(name) {
+			return true
+		}
+	}
+	for name := range f.BossHealingTaken {
+		if wow.IsKnownBoss(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func fightHasNPC(f *FightResult, name string) bool {
+	if _, ok := f.EnemyDamageTaken[name]; ok {
+		return true
+	}
+	if _, ok := f.BossHealingTaken[name]; ok {
+		return true
+	}
+	return false
+}
+
+func fightSharesEncounter(f *FightResult, bossName string) bool {
+	enc := wow.EncounterID(bossName)
+	if enc == "" {
+		// Standalone bosses only share with themselves (handled by fightHasNPC).
+		return false
+	}
+	for name := range f.EnemyDamageTaken {
+		if wow.EncounterID(name) == enc {
+			return true
+		}
+	}
+	for name := range f.BossHealingTaken {
+		if wow.EncounterID(name) == enc {
 			return true
 		}
 	}

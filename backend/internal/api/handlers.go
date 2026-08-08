@@ -18,6 +18,7 @@ import (
 	"rg-logs/internal/auth"
 	"rg-logs/internal/db"
 	"rg-logs/internal/ingest"
+	"rg-logs/internal/logarchive"
 	"rg-logs/internal/storage"
 )
 
@@ -101,6 +102,19 @@ func (h *Handler) CreateUpload(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, "file too large (max 100MB)")
 	}
 
+	filename := fileHeader.Filename
+	if filename == "" {
+		filename = "combatlog.txt"
+	}
+	if logarchive.LooksLikeZip(filename, data) {
+		if !logarchive.IsZip(data) {
+			return fiber.NewError(fiber.StatusBadRequest, "file looks like a zip but is not a valid zip archive")
+		}
+		if err := logarchive.ValidateZip(data); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+	}
+
 	sum := sha256.Sum256(data)
 	contentHash := hex.EncodeToString(sum[:])
 
@@ -118,15 +132,11 @@ func (h *Handler) CreateUpload(c fiber.Ctx) error {
 	name := strings.TrimSpace(firstNonEmpty(c.FormValue("name"), c.FormValue("Name")))
 
 	id := uuid.New()
-	storagePath := fmt.Sprintf("%s/%s.txt", user.ID.String(), id.String())
+	ext, contentType := logarchive.StorageMeta(filename, data)
+	storagePath := fmt.Sprintf("%s/%s%s", user.ID.String(), id.String(), ext)
 
-	if err := h.Storage.Upload(c.Context(), storagePath, "text/plain", data); err != nil {
+	if err := h.Storage.Upload(c.Context(), storagePath, contentType, data); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("storage: %v", err))
-	}
-
-	filename := fileHeader.Filename
-	if filename == "" {
-		filename = "combatlog.txt"
 	}
 
 	upload, err := h.Store.CreateUpload(c.Context(), db.CreateUploadParams{
